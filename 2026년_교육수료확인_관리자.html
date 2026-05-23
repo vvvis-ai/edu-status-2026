@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2026년 사이버 교육 이수 현황 [관리자]</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        * { font-family: 'Noto Sans KR', sans-serif; }
+        .fade-in { animation: fadeIn 0.25s ease; }
+        @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+    </style>
+</head>
+<body class="min-h-screen bg-slate-100">
+
+<!-- ============ 로그인 화면 ============ -->
+<div id="loginScreen" class="min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-xl border border-slate-100 p-10 w-full max-w-sm text-center">
+        <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-6" style="background: linear-gradient(135deg, #312e81, #4f46e5);">
+            <i data-lucide="shield-check" class="w-8 h-8 text-white"></i>
+        </div>
+        <h1 class="text-xl font-bold text-slate-900 mb-1">관리자 로그인</h1>
+        <p class="text-sm text-slate-400 mb-8">2026년 사이버 교육 이수 현황 관리</p>
+        <div class="text-left mb-4">
+            <label class="text-xs font-semibold text-slate-500 mb-1.5 block">비밀번호</label>
+            <input type="password" id="passwordInput" placeholder="비밀번호를 입력하세요"
+                class="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                onkeydown="if(event.key==='Enter') checkPassword()" />
+            <p id="loginError" class="text-xs text-red-500 mt-1.5 hidden">비밀번호가 올바르지 않습니다.</p>
+        </div>
+        <button onclick="checkPassword()"
+            class="w-full text-white font-semibold py-3 rounded-xl hover:opacity-90 transition-opacity text-sm"
+            style="background: linear-gradient(135deg, #312e81, #4f46e5);">
+            로그인
+        </button>
+    </div>
+</div>
+
+<!-- ============ 관리자 대시보드 ============ -->
+<div id="dashboard" class="hidden fade-in">
+
+    <!-- 상단 헤더 -->
+    <div style="background: linear-gradient(150deg, #312e81 0%, #4f46e5 60%, #6366f1 100%);" class="px-6 py-6 text-white">
+        <div class="max-w-full flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+                <div class="flex items-center gap-2 mb-1">
+                    <h1 class="text-xl font-bold">2026년 사이버 교육 이수 현황</h1>
+                    <span class="text-xs font-bold px-2 py-0.5 rounded-full bg-white/20 text-white flex items-center gap-1">
+                        <i data-lucide="shield-check" class="w-3 h-3"></i> 관리자
+                    </span>
+                </div>
+                <p class="text-indigo-200 text-sm">부서원들의 교육 진행 상태를 관리합니다. 셀을 클릭하여 이수 여부를 변경할 수 있습니다.</p>
+            </div>
+            <div class="flex gap-2 shrink-0">
+                <button onclick="copyStatus()"
+                    class="bg-white/10 hover:bg-white/20 border border-white/20 text-white px-4 py-2 rounded-xl flex items-center gap-2 transition-all text-sm">
+                    <i data-lucide="clipboard-copy" class="w-4 h-4"></i> 현황 복사
+                </button>
+                <button onclick="logout()"
+                    class="bg-white/10 hover:bg-white/20 border border-white/20 text-white px-4 py-2 rounded-xl flex items-center gap-2 transition-all text-sm">
+                    <i data-lucide="log-out" class="w-4 h-4"></i> 로그아웃
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="p-4 md:p-6">
+
+        <!-- 통계 -->
+        <div id="statsGrid" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6"></div>
+
+        <!-- 마감 임박 경고 배너 -->
+        <div id="urgentBanner" class="hidden mb-4"></div>
+
+        <!-- 필터 + 검색 -->
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 mb-4 flex flex-col md:flex-row gap-3 items-start md:items-center justify-between">
+            <div class="flex gap-2 flex-wrap">
+                <button id="filterAll" onclick="setFilter('all')"
+                    class="px-4 py-1.5 rounded-full text-sm font-semibold border transition-all border-indigo-500 bg-indigo-500 text-white">
+                    전체
+                </button>
+                <button id="filterTodo" onclick="setFilter('todo')"
+                    class="px-4 py-1.5 rounded-full text-sm font-semibold border transition-all border-slate-200 text-slate-500 hover:border-red-300 hover:text-red-600">
+                    미이수 있는 인원
+                </button>
+                <button id="filterDone" onclick="setFilter('done')"
+                    class="px-4 py-1.5 rounded-full text-sm font-semibold border transition-all border-slate-200 text-slate-500 hover:border-emerald-300 hover:text-emerald-600">
+                    전체 완료자
+                </button>
+            </div>
+            <div class="flex items-center gap-3">
+                <div class="relative">
+                    <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4"></i>
+                    <input type="text" id="searchInput" placeholder="이름 또는 직급 검색..."
+                        class="pl-10 pr-4 py-2 bg-slate-50 rounded-xl text-sm w-52 focus:ring-2 focus:ring-indigo-400 outline-none border border-slate-200" />
+                </div>
+                <span id="saveStatus" class="text-xs font-semibold hidden"></span>
+            </div>
+        </div>
+
+        <!-- 테이블 -->
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse">
+                    <thead><tr id="tableHeaderRow" class="bg-slate-800 text-white"></tr></thead>
+                    <tbody id="tableBody"></tbody>
+                </table>
+            </div>
+            <div id="emptyState" class="p-12 text-center text-slate-400 hidden">
+                <i data-lucide="filter" class="mx-auto mb-2 opacity-20 w-12 h-12"></i>
+                검색 결과가 없습니다.
+            </div>
+        </div>
+
+        <!-- 하단 -->
+        <div class="mt-5 flex flex-col md:flex-row gap-4 items-center justify-between text-xs text-slate-400 border-t border-slate-200 pt-5">
+            <p>© 2026 부서 교육 관리 시스템 — 관리자 전용</p>
+            <div class="flex gap-4 items-center">
+                <button onclick="resetData()" class="flex items-center gap-1 hover:text-red-500 transition-colors">
+                    <i data-lucide="rotate-ccw" class="w-3 h-3"></i> 명단 초기화
+                </button>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<script>
+    const ADMIN_PASSWORD = '4081';
+    const API_ENDPOINT   = 'https://my-dashboard-api.antae98.workers.dev';
+
+    const courses = [
+        { id: 1,  name: '공직자 안보교육',       site: '부산광역시 인재개발원',           url: 'https://busan.nhi.go.kr',         deadline: '2026-06-19', mandatory: true },
+        { id: 2,  name: '직장 내 괴롭힘 예방',   site: '동구청 사이버연수원',              url: 'https://bsdonggu.ubob.com',       deadline: '2026-06-30', mandatory: true },
+        { id: 3,  name: '장애인식개선교육',       site: '국가공무원인재개발원',             url: 'https://busan.nhi.go.kr',         deadline: '2026-09-04', mandatory: true },
+        { id: 4,  name: '4대 폭력예방 교육',     site: '부산광역시 인재개발원',            url: 'https://busan.nhi.go.kr',         deadline: '2026-09-30', mandatory: true },
+        { id: 5,  name: '성인지 교육',            site: '한국양성평등교육진흥원',           url: 'https://eqgender.kigepe.or.kr',   deadline: '2026-09-30', mandatory: true },
+        { id: 6,  name: '감염병 교육',            site: '부산광역시 인재개발원',            url: 'https://busan.nhi.go.kr',         deadline: '2026-12-03', mandatory: true },
+        { id: 7,  name: '긴급복지 신고의무',      site: 'KOHI 의무교육 플랫폼',            url: 'https://in.kohi.or.kr',           deadline: '2026-12-11', mandatory: true },
+        { id: 8,  name: '개인정보 보호',          site: '개인정보배움터',                   url: 'https://edu.privacy.go.kr',       deadline: '2026-12-31', mandatory: true },
+        { id: 9,  name: '아동학대 예방 신고의무', site: '부산광역시 인재개발원 나라배움터', url: 'https://busan.nhi.go.kr',         deadline: '2026-10-31', mandatory: true },
+        { id: 10, name: '통일교육',               site: '동구공무원사이버연수원',            url: 'https://bsdonggu.ubob.com',       deadline: '2026-12-31', mandatory: true },
+    ];
+
+    const initialMembers = [
+        { id: 1,  name: '허미영', position: '행정5급',        completions: [1, 2] },
+        { id: 2,  name: '장해성', position: '행정6급',        completions: [1, 2, 3] },
+        { id: 3,  name: '이정종', position: '행정6급',        completions: [1] },
+        { id: 4,  name: '정경원', position: '행정6급',        completions: [1, 3] },
+        { id: 5,  name: '유행연', position: '행정6급',        completions: [] },
+        { id: 6,  name: '신봉일', position: '행정6급',        completions: [] },
+        { id: 7,  name: '이시정', position: '행정7급',        completions: [] },
+        { id: 8,  name: '전영옥', position: '행정8급',        completions: [] },
+        { id: 9,  name: '안태욱', position: '행정9급',        completions: [] },
+        { id: 10, name: '강소희', position: '시간선택제라급', completions: [] },
+        { id: 11, name: '박경덕', position: '행정7급',        completions: [] },
+        { id: 12, name: '심유나', position: '행정8급',        completions: [] },
+        { id: 13, name: '이효민', position: '행정8급',        completions: [] },
+        { id: 14, name: '성지혜', position: '시간선택제라급', completions: [] },
+        { id: 15, name: '최유정', position: '시간선택제마급', completions: [] },
+        { id: 16, name: '김인혜', position: '행정7급',        completions: [] },
+        { id: 17, name: '문은진', position: '사서8급',        completions: [] },
+        { id: 18, name: '이지희', position: '사서7급',        completions: [] },
+        { id: 19, name: '김지연', position: '사서8급',        completions: [] },
+        { id: 20, name: '양소라', position: '사서8급',        completions: [] },
+        { id: 21, name: '안형진', position: '전산9급',        completions: [] },
+        { id: 22, name: '한지성', position: '시간선택제마급', completions: [] },
+        { id: 23, name: '이설희', position: '공무직',         completions: [] },
+        { id: 24, name: '이민정', position: '사서7급',        completions: [] },
+        { id: 25, name: '이창영', position: '기계운영6급',    completions: [] },
+        { id: 26, name: '송준영', position: '사서8급',        completions: [] },
+        { id: 27, name: '노금혜', position: '사서9급',        completions: [] },
+        { id: 28, name: '김상득', position: '청원경찰',       completions: [] },
+        { id: 29, name: '조영준', position: '청원경찰',       completions: [] },
+        { id: 30, name: '이상윤', position: '청원경찰',       completions: [] },
+    ];
+
+    let members = JSON.parse(JSON.stringify(initialMembers));
+    let searchTerm = '';
+    let filterMode = 'all'; // all | todo | done
+
+    function getDday(deadline) {
+        const today = new Date(); today.setHours(0,0,0,0);
+        return Math.ceil((new Date(deadline) - today) / (1000*60*60*24));
+    }
+
+    // ============ 로그인 ============
+    function checkPassword() {
+        if (document.getElementById('passwordInput').value === ADMIN_PASSWORD) {
+            document.getElementById('loginScreen').classList.add('hidden');
+            document.getElementById('dashboard').classList.remove('hidden');
+            document.getElementById('searchInput').addEventListener('input', e => {
+                searchTerm = e.target.value.toLowerCase();
+                renderTable();
+            });
+            renderTableHeaders();
+            loadData();
+            renderUrgentBanner();
+        } else {
+            document.getElementById('loginError').classList.remove('hidden');
+            document.getElementById('passwordInput').value = '';
+            document.getElementById('passwordInput').focus();
+        }
+    }
+
+    function logout() {
+        document.getElementById('loginScreen').classList.remove('hidden');
+        document.getElementById('dashboard').classList.add('hidden');
+        document.getElementById('passwordInput').value = '';
+        document.getElementById('loginError').classList.add('hidden');
+        if (window.lucide) lucide.createIcons();
+    }
+
+    // ============ 마감 임박 배너 ============
+    function renderUrgentBanner() {
+        const urgent = courses.filter(c => { const d = getDday(c.deadline); return d >= 0 && d <= 30; });
+        const banner = document.getElementById('urgentBanner');
+        if (!urgent.length) { banner.classList.add('hidden'); return; }
+        banner.classList.remove('hidden');
+        banner.innerHTML = `
+            <div class="bg-red-50 border border-red-200 rounded-2xl p-4 flex items-start gap-3">
+                <i data-lucide="alert-triangle" class="w-5 h-5 text-red-500 shrink-0 mt-0.5"></i>
+                <div>
+                    <p class="text-sm font-bold text-red-700 mb-1">마감 임박 교육 (30일 이내)</p>
+                    <div class="flex flex-wrap gap-2">
+                        ${urgent.map(c => {
+                            const d = getDday(c.deadline);
+                            const done = members.filter(m => m.completions.includes(c.id)).length;
+                            const pct = Math.round(done / members.length * 100);
+                            return `<span class="text-xs bg-white border border-red-200 rounded-full px-3 py-1 text-red-700 font-semibold">
+                                ${c.name} — D-${d} · ${done}/${members.length}명 (${pct}%)
+                            </span>`;
+                        }).join('')}
+                    </div>
+                </div>
+            </div>`;
+        if (window.lucide) lucide.createIcons();
+    }
+
+    // ============ 필터 ============
+    function setFilter(mode) {
+        filterMode = mode;
+        ['all','todo','done'].forEach(k => {
+            const btn = document.getElementById(`filter${k.charAt(0).toUpperCase()+k.slice(1)}`);
+            if (k === mode) {
+                btn.className = 'px-4 py-1.5 rounded-full text-sm font-semibold border transition-all border-indigo-500 bg-indigo-500 text-white';
+            } else {
+                btn.className = 'px-4 py-1.5 rounded-full text-sm font-semibold border transition-all border-slate-200 text-slate-500 hover:border-slate-300';
+            }
+        });
+        renderTable();
+    }
+
+    // ============ API ============
+    async function syncData() {
+        showStatus('저장 중...', 'text-amber-600');
+        try {
+            const res = await fetch(API_ENDPOINT, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ members })
+            });
+            if (res.ok) showStatus('✓ 저장 완료', 'text-emerald-600');
+            else throw new Error();
+        } catch(e) {
+            localStorage.setItem('cyberTrainingMembers_backup', JSON.stringify({ members }));
+            showStatus('⚠ 로컬 임시 저장', 'text-amber-600');
+        }
+    }
+
+    async function loadData() {
+        try {
+            const res = await fetch(API_ENDPOINT);
+            if (res.ok) {
+                const data = await res.json();
+                if (data?.members?.length) members = data.members;
+            } else throw new Error();
+        } catch(e) {
+            const local = localStorage.getItem('cyberTrainingMembers_backup');
+            if (local) try { const d = JSON.parse(local); if (d?.members?.length) members = d.members; } catch(e) {}
+        }
+        updateUI();
+    }
+
+    window.toggleCompletion = async (memberId, courseId) => {
+        members = members.map(m => {
+            if (m.id !== memberId) return m;
+            const done = m.completions.includes(courseId);
+            return { ...m, completions: done ? m.completions.filter(id => id !== courseId) : [...m.completions, courseId] };
+        });
+        updateUI();
+        await syncData();
+    };
+
+    window.resetData = async () => {
+        if (confirm('명단을 초기 상태로 되돌리시겠습니까?\n(저장된 체크 데이터가 모두 사라집니다)')) {
+            members = JSON.parse(JSON.stringify(initialMembers));
+            updateUI();
+            await syncData();
+        }
+    };
+
+    window.copyStatus = () => {
+        const text = members.map(m => `${m.name}(${m.position}): ${m.completions.length}/${courses.length} 완료`).join('\n');
+        navigator.clipboard.writeText(text).catch(() => {
+            const el = document.createElement('textarea');
+            el.value = text; document.body.appendChild(el); el.select();
+            document.execCommand('copy'); document.body.removeChild(el);
+        });
+        showStatus('✓ 복사 완료', 'text-emerald-600');
+    };
+
+    function showStatus(msg, cls) {
+        const el = document.getElementById('saveStatus');
+        el.textContent = msg;
+        el.className = `text-xs font-semibold ${cls}`;
+        el.classList.remove('hidden');
+        setTimeout(() => el.classList.add('hidden'), 2500);
+    }
+
+    // ============ 렌더링 ============
+    function updateUI() { renderStats(); renderTable(); }
+
+    function renderStats() {
+        const total = members.length * courses.length;
+        const done  = members.reduce((a, m) => a + m.completions.length, 0);
+        const pct   = total === 0 ? 0 : Math.round(done / total * 100);
+        const notStarted = members.filter(m => m.completions.length === 0).length;
+        const allDone    = members.filter(m => m.completions.length === courses.length).length;
+
+        document.getElementById('statsGrid').innerHTML = [
+            { label: '전체 이수율',  value: `${pct}%`,         icon: 'check-circle-2', grad: 'from-emerald-500 to-emerald-600' },
+            { label: '완료자',        value: `${allDone}명`,    icon: 'award',          grad: 'from-blue-500 to-blue-600' },
+            { label: '미이수 인원',   value: `${members.length - allDone}명`, icon: 'alert-circle', grad: 'from-amber-500 to-orange-500' },
+            { label: '미시작 인원',   value: `${notStarted}명`, icon: 'minus-circle',   grad: 'from-red-500 to-red-600' },
+        ].map(item => `
+            <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-4">
+                <div class="bg-gradient-to-br ${item.grad} p-3 rounded-xl shadow-sm">
+                    <i data-lucide="${item.icon}" class="text-white w-5 h-5"></i>
+                </div>
+                <div>
+                    <p class="text-xs text-slate-400 font-medium">${item.label}</p>
+                    <p class="text-2xl font-bold text-slate-900 leading-tight">${item.value}</p>
+                </div>
+            </div>`).join('');
+        if (window.lucide) lucide.createIcons();
+    }
+
+    function renderTableHeaders() {
+        const today = new Date(); today.setHours(0,0,0,0);
+        let html = `<th class="px-4 py-3 text-xs font-semibold text-slate-300 whitespace-nowrap sticky left-0 bg-slate-800 z-10">부서원</th>`;
+        courses.forEach(c => {
+            const d = getDday(c.deadline);
+            let dLabel = d < 0 ? '마감' : `D-${d}`;
+            let dColor = d <= 0 ? 'text-red-400' : d <= 30 ? 'text-orange-400' : d <= 90 ? 'text-amber-400' : 'text-slate-500';
+            let name = c.name;
+            if (name.length >= 6) {
+                if (name.includes(' ')) {
+                    const parts = name.split(' '), mid = Math.ceil(parts.length/2);
+                    name = parts.slice(0,mid).join('&nbsp;') + '<br/>' + parts.slice(mid).join('&nbsp;');
+                } else {
+                    const mid = Math.ceil(name.length/2);
+                    name = name.substring(0,mid) + '<br/>' + name.substring(mid);
+                }
+            }
+            html += `<th class="px-2 py-3 text-xs font-semibold text-slate-300 border-l border-slate-700 min-w-[72px] text-center leading-snug">
+                <div>${name}</div>
+                <div class="text-[9px] ${dColor} font-bold mt-0.5">${dLabel}</div>
+            </th>`;
+        });
+        html += `<th class="px-3 py-3 text-xs font-semibold text-slate-300 border-l border-slate-700 text-center whitespace-nowrap">진행도</th>`;
+        document.getElementById('tableHeaderRow').innerHTML = html;
+    }
+
+    function renderTable() {
+        let filtered = members.filter(m =>
+            m.name.includes(searchTerm) || m.position.includes(searchTerm)
+        );
+        if (filterMode === 'todo') filtered = filtered.filter(m => m.completions.length < courses.length);
+        if (filterMode === 'done') filtered = filtered.filter(m => m.completions.length === courses.length);
+
+        const emptyState = document.getElementById('emptyState');
+        if (!filtered.length) {
+            document.getElementById('tableBody').innerHTML = '';
+            emptyState.classList.remove('hidden');
+            return;
+        }
+        emptyState.classList.add('hidden');
+
+        document.getElementById('tableBody').innerHTML = filtered.map((member, idx) => {
+            const progress = Math.round(member.completions.length / courses.length * 100);
+            const isAll = member.completions.length === courses.length;
+            const barColor = isAll ? 'bg-emerald-500' : progress > 50 ? 'bg-blue-500' : 'bg-amber-500';
+            const rowBg = idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50';
+
+            let row = `
+                <tr class="${rowBg} hover:bg-indigo-50/40 transition-colors group">
+                    <td class="px-4 py-2.5 border-b border-slate-100 whitespace-nowrap sticky left-0 ${rowBg} group-hover:bg-indigo-50/40">
+                        <div class="flex items-baseline gap-1">
+                            <span class="text-[10px] text-slate-400">${member.position}</span>
+                            <span class="text-sm font-bold text-slate-800">${member.name}</span>
+                        </div>
+                    </td>`;
+
+            courses.forEach(course => {
+                const done = member.completions.includes(course.id);
+                row += `
+                    <td class="px-2 py-2.5 border-b border-slate-100 border-l border-l-slate-50 text-center ${done ? '' : 'bg-red-50/30'}">
+                        <button onclick="toggleCompletion(${member.id}, ${course.id})"
+                            class="inline-flex items-center justify-center w-7 h-7 rounded-full transition-all hover:scale-110
+                                   ${done ? 'text-emerald-500 bg-emerald-50 hover:bg-emerald-100' : 'text-slate-300 hover:text-slate-400 hover:bg-slate-100'}">
+                            <i data-lucide="${done ? 'check-circle-2' : 'circle'}" class="w-5 h-5"></i>
+                        </button>
+                    </td>`;
+            });
+
+            row += `
+                    <td class="px-3 py-2.5 border-b border-slate-100 border-l border-l-slate-50">
+                        <div class="flex flex-col items-center gap-1">
+                            <span class="text-xs font-bold ${isAll ? 'text-emerald-600' : 'text-slate-600'}">${progress}%</span>
+                            <div class="w-14 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                                <div class="h-full transition-all duration-500 ${barColor} rounded-full" style="width:${progress}%"></div>
+                            </div>
+                        </div>
+                    </td>
+                </tr>`;
+            return row;
+        }).join('');
+
+        if (window.lucide) lucide.createIcons();
+    }
+
+    if (window.lucide) lucide.createIcons();
+</script>
+</body>
+</html>
