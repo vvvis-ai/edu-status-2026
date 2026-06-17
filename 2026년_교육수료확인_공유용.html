@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2026년 교육 이수 확인</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        * { font-family: 'Noto Sans KR', sans-serif; }
+        .fade-in { animation: fadeIn 0.25s ease; }
+        @keyframes fadeIn { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+        .ring-fill { fill:none; stroke-width:10; stroke-linecap:round; transform:rotate(-90deg); transform-origin:center; transition:stroke-dashoffset 0.9s cubic-bezier(0.4,0,0.2,1); }
+        .name-btn:hover { transform: translateY(-2px); }
+        .name-btn { transition: all 0.15s ease; }
+        .course-card:hover { transform: translateY(-1px); }
+        .course-card { transition: all 0.15s ease; }
+    </style>
+</head>
+<body class="min-h-screen bg-slate-100">
+
+<!-- ============ 이름 선택 화면 ============ -->
+<div id="selectScreen">
+    <div style="background: linear-gradient(150deg, #312e81 0%, #4f46e5 60%, #6366f1 100%);" class="px-4 pt-14 pb-20 text-center text-white relative overflow-hidden">
+        <div class="absolute inset-0 opacity-10" style="background-image: radial-gradient(circle at 20% 80%, white 1px, transparent 1px), radial-gradient(circle at 80% 20%, white 1px, transparent 1px); background-size: 40px 40px;"></div>
+        <div class="relative z-10">
+            <div class="text-5xl mb-4">📋</div>
+            <h1 class="text-2xl font-bold mb-2 tracking-tight">2026년 사이버 교육 이수 현황</h1>
+            <p class="text-indigo-200 text-sm">이름을 선택하면 나의 교육 현황을 확인할 수 있습니다</p>
+            <div class="mt-6 max-w-xs mx-auto">
+                <input type="text" id="nameSearch" placeholder="🔍  이름으로 검색..."
+                    class="w-full px-5 py-3 rounded-full text-slate-800 text-sm outline-none shadow-lg focus:ring-2 focus:ring-white/50 placeholder-slate-400"
+                    oninput="filterNames(this.value)" />
+            </div>
+        </div>
+    </div>
+    <div class="max-w-3xl mx-auto px-4 -mt-6 pb-12 pt-4">
+        <div class="bg-white rounded-2xl shadow-lg border border-slate-100 p-6">
+            <div class="flex items-center justify-between mb-5">
+                <div>
+                    <h2 class="text-base font-bold text-slate-800">이름을 선택하세요</h2>
+                    <p class="text-xs text-slate-400 mt-0.5">선택 후 나의 미이수 교육을 바로 확인할 수 있습니다</p>
+                </div>
+                <span class="text-xs font-semibold px-3 py-1 rounded-full bg-indigo-50 text-indigo-600">총 30명</span>
+            </div>
+            <div id="nameGrid" class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2.5"></div>
+            <div id="noResult" class="hidden text-center py-10 text-slate-400 text-sm">검색 결과가 없습니다.</div>
+        </div>
+    </div>
+</div>
+
+<!-- ============ 개인 대시보드 ============ -->
+<div id="personalDashboard" class="hidden fade-in pb-16">
+    <!-- 헤더 -->
+    <div style="background: linear-gradient(150deg, #312e81 0%, #4f46e5 60%, #6366f1 100%);" class="px-4 pb-16 pt-8 text-white relative overflow-hidden">
+        <div class="absolute inset-0 opacity-10" style="background-image: radial-gradient(circle at 20% 80%, white 1px, transparent 1px); background-size: 40px 40px;"></div>
+        <div class="max-w-2xl mx-auto relative z-10">
+            <button onclick="goBack()" class="flex items-center gap-1.5 text-indigo-200 hover:text-white text-sm mb-8 transition-colors">
+                ← 목록으로
+            </button>
+            <div class="flex items-center justify-between gap-4">
+                <div>
+                    <p class="text-indigo-200 text-sm mb-1" id="greetPosition"></p>
+                    <h2 class="text-3xl font-bold tracking-tight" id="greetName"></h2>
+                    <p class="text-indigo-200 text-sm mt-1">님의 2026년 교육 현황</p>
+                </div>
+                <div class="relative shrink-0">
+                    <svg viewBox="0 0 100 100" class="w-24 h-24 drop-shadow-lg">
+                        <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="10"/>
+                        <circle id="progressRing" cx="50" cy="50" r="42" class="ring-fill" stroke="#a5b4fc" stroke-dasharray="263.9" stroke-dashoffset="263.9"/>
+                    </svg>
+                    <div class="absolute inset-0 flex flex-col items-center justify-center">
+                        <span class="text-xl font-bold" id="progressPct">0%</span>
+                        <span class="text-[9px] text-indigo-200 font-medium">이수율</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 통계 카드 -->
+    <div class="max-w-2xl mx-auto px-4 -mt-6 mb-6">
+        <div class="bg-white rounded-2xl shadow-lg border border-slate-100 p-5 grid grid-cols-3 divide-x divide-slate-100">
+            <div class="text-center pr-4">
+                <p class="text-2xl font-bold text-emerald-500" id="doneCount">0</p>
+                <p class="text-xs text-slate-400 mt-1 font-medium">이수 완료</p>
+            </div>
+            <div class="text-center px-4">
+                <p class="text-2xl font-bold text-red-500" id="todoCount">0</p>
+                <p class="text-xs text-slate-400 mt-1 font-medium">미이수</p>
+            </div>
+            <div class="text-center pl-4">
+                <p class="text-2xl font-bold text-slate-400" id="totalCount">0</p>
+                <p class="text-xs text-slate-400 mt-1 font-medium">전체</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 미이수 교육 -->
+    <div class="max-w-2xl mx-auto px-4 mb-6">
+        <div class="flex items-center gap-2 mb-3">
+            <span class="w-2 h-2 rounded-full bg-red-500 inline-block"></span>
+            <h3 class="text-sm font-bold text-slate-700">이수해야 할 교육</h3>
+        </div>
+        <div id="allDone" class="hidden bg-emerald-50 border border-emerald-200 rounded-2xl p-8 text-center">
+            <div class="text-4xl mb-3">🎉</div>
+            <p class="font-bold text-emerald-800 text-lg">모든 교육을 이수했습니다!</p>
+            <p class="text-sm text-emerald-600 mt-1">2026년 의무 교육을 모두 완료하셨습니다. 수고하셨습니다.</p>
+        </div>
+        <div id="todoCards" class="space-y-3"></div>
+    </div>
+
+    <!-- 완료 교육 -->
+    <div class="max-w-2xl mx-auto px-4 mb-4" id="doneSection">
+        <button onclick="toggleDone()" class="flex items-center gap-2 text-sm font-semibold text-slate-400 hover:text-slate-600 transition-colors mb-3 w-full">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span>
+            완료한 교육
+            <span id="doneToggleLabel" class="text-xs font-normal ml-1">↓ 펼치기</span>
+        </button>
+        <div id="doneCards" class="space-y-2 hidden"></div>
+    </div>
+
+    <!-- 전체 부서 현황 -->
+    <div class="max-w-2xl mx-auto px-4">
+        <button onclick="toggleDept()" class="w-full flex items-center justify-between text-sm font-semibold text-slate-400 hover:text-slate-600 transition-colors py-3 border-t border-slate-200">
+            <span>전체 부서 현황</span>
+            <span id="deptToggleLabel" class="text-xs font-normal">펼치기 ↓</span>
+        </button>
+        <div id="deptSection" class="hidden mt-3 bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+            <div class="space-y-1.5" id="deptList"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const API_ENDPOINT = 'https://my-dashboard-api.antae98.workers.dev';
+
+    const courses = [
+        { 
+            id: 1,  
+            name: '공직자 안보교육',       
+            site: '부산광역시 인재개발원',          
+            url: 'https://busan.nhi.go.kr',         
+            deadline: '2026-06-19', 
+            mandatory: true,
+            detail: ['2026년 공직자 안보교육']
+        },
+        { 
+            id: 2,  
+            name: '직장 내 괴롭힘 예방',   
+            site: '동구청 사이버연수원',             
+            url: 'https://bsdonggu.ubob.com',       
+            deadline: '2026-06-30', 
+            mandatory: true,
+            detail: [
+                '프리한 법정교육! 박선영X배성재의 직장 내 괴롭힘 금지',
+                '직장 내 괴롭힘 금지법의 이해[2026-1기]'
+            ]
+        },
+        { 
+            id: 3,  
+            name: '장애인식개선교육',       
+            site: '국가공무원인재개발원',            
+            url: 'https://busan.nhi.go.kr',         
+            deadline: '2026-09-04', 
+            mandatory: true,
+            detail: ['고용노동부와 보건복지부가 함께하는 장애인식개선교육']
+        },
+        { 
+            id: 4,  
+            name: '4대 폭력예방 교육',     
+            site: '부산광역시 인재개발원',           
+            url: 'https://busan.nhi.go.kr',         
+            deadline: '2026-09-30', 
+            mandatory: true,
+            detail: [
+                '평등한 일상, 폭력예방교육',
+                '평등한 일상, 폭력예방교육(고위직해당)'
+            ]
+        },
+        { 
+            id: 5,  
+            name: '성인지 교육',            
+            site: '한국양성평등교육진흥원',          
+            url: 'https://eqgender.kigepe.or.kr',   
+            deadline: '2026-09-30', 
+            mandatory: true,
+            detail: [
+                '1) 양성평등과 성인지 감수성 이해',
+                '2) 성인지 정책과 성주류화',
+                '3) 사례로 알아보는 사업성별영향평가',
+                '4) 양성평등한 조직문화 만들기',
+                '5) 여성친화도시 이해 프로젝트',
+                '6) 양성평등 정책의 이해',
+                '7) 변화를 읽다, 성인지 예산',
+                '8) 변화를 읽다, 성인지 통계',
+                '9) 아카이브로 보는 양성평등 정책'
+            ]
+        },
+        { 
+            id: 6,  
+            name: '감염병 교육',            
+            site: '부산광역시 인재개발원',           
+            url: 'https://busan.nhi.go.kr',         
+            deadline: '2026-12-03', 
+            mandatory: true,
+            detail: ['감염병교육']
+        },
+        { 
+            id: 7,  
+            name: '긴급복지 신고의무',      
+            site: 'KOHI 의무교육 플랫폼',           
+            url: 'https://in.kohi.or.kr',           
+            deadline: '2026-12-11', 
+            mandatory: true,
+            detail: ['긴급복지지원 신고의무 교육(2026)']
+        },
+        { 
+            id: 8,  
+            name: '개인정보 보호',          
+            site: '동구청 사이버연수원',                  
+            url: 'https://bsdonggu.ubob.com/',       
+            deadline: '2026-12-31', 
+            mandatory: true,
+            detail: ['프리한 법정교육! 박선영X배성재의 개인정보 보호']
+        },
+        { 
+            id: 9,  
+            name: '아동학대 예방 신고의무', 
+            site: '부산광역시 인재개발원 나라배움터',
+            url: 'https://busan.nhi.go.kr',         
+            deadline: '2026-10-31', 
+            mandatory: true,
+            detail: ['아동학대 신고의무자 및 공공부문 아동학대 예방교육']
+        },
+        { 
+            id: 10, 
+            name: '통일교육',               
+            site: '동구공무원사이버연수원',           
+            url: 'https://bsdonggu.ubob.com',       
+            deadline: '2026-12-31', 
+            mandatory: true,
+            detail: ['2026년 공공부문 통일교육']
+        },
+    ];
+
+    const initialMembers = [
+        { id: 1,  name: '허미영', position: '행정5급',        completions: [1, 2] },
+        { id: 2,  name: '장해성', position: '행정6급',        completions: [1, 2, 3] },
+        { id: 3,  name: '이정종', position: '행정6급',        completions: [1] },
+        { id: 4,  name: '정경원', position: '행정6급',        completions: [1, 3] },
+        { id: 5,  name: '유행연', position: '행정6급',        completions: [] },
+        { id: 6,  name: '신봉일', position: '행정6급',        completions: [] },
+        { id: 7,  name: '이시정', position: '행정7급',        completions: [] },
+        { id: 8,  name: '전영옥', position: '행정8급',        completions: [] },
+        { id: 9,  name: '안태욱', position: '행정9급',        completions: [] },
+        { id: 10, name: '강소희', position: '시간선택제라급', completions: [] },
+        { id: 11, name: '박경덕', position: '행정7급',        completions: [] },
+        { id: 12, name: '심유나', position: '행정8급',        completions: [] },
+        { id: 13, name: '이효민', position: '행정8급',        completions: [] },
+        { id: 14, name: '성지혜', position: '시간선택제라급', completions: [] },
+        { id: 15, name: '최유정', position: '시간선택제마급', completions: [] },
+        { id: 16, name: '김인혜', position: '행정7급',        completions: [] },
+        { id: 17, name: '문은진', position: '사서8급',        completions: [] },
+        { id: 18, name: '이지희', position: '사서7급',        completions: [] },
+        { id: 19, name: '김지연', position: '사서8급',        completions: [] },
+        { id: 20, name: '양소라', position: '사서8급',        completions: [] },
+        { id: 21, name: '안형진', position: '전산9급',        completions: [] },
+        { id: 22, name: '한지성', position: '시간선택제마급', completions: [] },
+        { id: 23, name: '이설희', position: '공무직',         completions: [] },
+        { id: 24, name: '이민정', position: '사서7급',        completions: [] },
+        { id: 25, name: '이창영', position: '기계운영6급',    completions: [] },
+        { id: 26, name: '송준영', position: '사서8급',        completions: [] },
+        { id: 27, name: '노금혜', position: '사서9급',        completions: [] },
+        { id: 28, name: '김상득', position: '청원경찰',       completions: [] },
+        { id: 29, name: '조영준', position: '청원경찰',       completions: [] },
+        { id: 30, name: '이상윤', position: '청원경찰',       completions: [] },
+    ];
+
+    let members = JSON.parse(JSON.stringify(initialMembers));
+    let currentMember = null;
+    let doneOpen = false;
+    let deptOpen = false;
+
+    function getDday(deadline) {
+        const today = new Date(); today.setHours(0,0,0,0);
+        const end = new Date(deadline);
+        return Math.ceil((end - today) / (1000*60*60*24));
+    }
+
+    function getDdayBadge(d) {
+        if (d < 0)  return `<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-500">마감</span>`;
+        if (d === 0) return `<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-600 text-white">D-Day</span>`;
+        if (d <= 30) return `<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700">D-${d}</span>`;
+        if (d <= 90) return `<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">D-${d}</span>`;
+        return `<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">D-${d}</span>`;
+    }
+
+    async function loadData() {
+        try {
+            const res = await fetch(API_ENDPOINT);
+            if (res.ok) {
+                const data = await res.json();
+                if (data?.members?.length) members = data.members;
+            }
+        } catch(e) {}
+        renderNameGrid(members);
+    }
+
+    function renderNameGrid(list) {
+        const grid = document.getElementById('nameGrid');
+        const noResult = document.getElementById('noResult');
+        if (!list.length) {
+            grid.innerHTML = '';
+            noResult.classList.remove('hidden');
+            return;
+        }
+        noResult.classList.add('hidden');
+        grid.innerHTML = list.map(m => {
+            const pct = Math.round(m.completions.length / courses.length * 100);
+            const isAll = m.completions.length === courses.length;
+            return `
+            <button onclick="selectMember(${m.id})"
+                class="name-btn bg-white border border-slate-200 rounded-xl p-3 text-center hover:border-indigo-400 hover:shadow-md group">
+                <p class="text-[9px] text-slate-400 group-hover:text-indigo-400 transition-colors truncate">${m.position}</p>
+                <p class="text-sm font-bold text-slate-800 mt-0.5">${m.name}</p>
+                <div class="mt-2 flex items-center justify-center gap-1">
+                    <div class="w-8 h-1 rounded-full bg-slate-100 overflow-hidden">
+                        <div class="h-full ${isAll ? 'bg-emerald-400' : 'bg-indigo-400'}" style="width:${pct}%"></div>
+                    </div>
+                    <span class="text-[10px] ${isAll ? 'text-emerald-500' : 'text-slate-400'} font-semibold">${m.completions.length}/${courses.length}</span>
+                </div>
+            </button>`;
+        }).join('');
+    }
+
+    function filterNames(val) {
+        const filtered = members.filter(m => m.name.includes(val) || m.position.includes(val));
+        renderNameGrid(filtered);
+    }
+
+    function selectMember(id) {
+        currentMember = members.find(m => m.id === id);
+        if (!currentMember) return;
+        document.getElementById('selectScreen').classList.add('hidden');
+        const dash = document.getElementById('personalDashboard');
+        dash.classList.remove('hidden');
+        dash.classList.add('fade-in');
+        window.scrollTo(0, 0);
+        renderPersonal();
+    }
+
+    function goBack() {
+        document.getElementById('personalDashboard').classList.add('hidden');
+        document.getElementById('selectScreen').classList.remove('hidden');
+        document.getElementById('nameSearch').value = '';
+        renderNameGrid(members);
+        doneOpen = false;
+        deptOpen = false;
+        window.scrollTo(0, 0);
+    }
+
+    function renderPersonal() {
+        const m = currentMember;
+        const done = courses.filter(c => m.completions.includes(c.id));
+        const todo = courses.filter(c => !m.completions.includes(c.id));
+        const pct = Math.round(done.length / courses.length * 100);
+
+        document.getElementById('greetPosition').textContent = m.position;
+        document.getElementById('greetName').textContent = m.name;
+        document.getElementById('progressPct').textContent = `${pct}%`;
+        document.getElementById('doneCount').textContent = done.length;
+        document.getElementById('todoCount').textContent = todo.length;
+        document.getElementById('totalCount').textContent = courses.length;
+
+        const circumference = 263.9;
+        const offset = circumference * (1 - pct / 100);
+        setTimeout(() => {
+            document.getElementById('progressRing').style.strokeDashoffset = offset;
+        }, 50);
+
+        const todoContainer = document.getElementById('todoCards');
+        const allDone = document.getElementById('allDone');
+        if (todo.length === 0) {
+            todoContainer.innerHTML = '';
+            allDone.classList.remove('hidden');
+        } else {
+            allDone.classList.add('hidden');
+            const sorted = [...todo].sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
+            todoContainer.innerHTML = sorted.map(c => {
+                const d = getDday(c.deadline);
+                const urgent = d >= 0 && d <= 30;
+                
+                const detailHtml = c.detail.map(item => `
+                    <div class="flex items-start gap-1 text-slate-600 mt-0.5">
+                        <span class="text-indigo-400 shrink-0 select-none">•</span>
+                        <span class="break-all font-medium">${item}</span>
+                    </div>
+                `).join('');
+
+                return `
+                <a href="${c.url}" target="_blank" rel="noopener noreferrer"
+                    class="course-card block bg-white border ${urgent ? 'border-red-200 bg-red-50/30' : 'border-slate-200'} rounded-2xl p-4 hover:shadow-md hover:border-indigo-300 group">
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="flex-1 min-w-0">
+                            <p class="font-bold text-base text-slate-800 group-hover:text-indigo-700 transition-colors">${c.name}</p>
+                            <p class="text-xs text-slate-400 mt-0.5">기관/사이트: ${c.site} | 마감 ${c.deadline}</p>
+                            
+                            <div class="mt-2.5 pt-2 border-t border-dashed border-slate-100 text-xs">
+                                <p class="text-[11px] font-bold text-indigo-500 mb-1">📝 실제 수강 과정명</p>
+                                ${detailHtml}
+                            </div>
+                        </div>
+                        <div class="flex flex-col items-end gap-2 shrink-0">
+                            ${getDdayBadge(d)}
+                            <span class="text-[11px] text-indigo-500 font-semibold group-hover:underline whitespace-nowrap">교육 바로가기 →</span>
+                        </div>
+                    </div>
+                </a>`;
+            }).join('');
+        }
+
+        const doneCards = document.getElementById('doneCards');
+        doneCards.innerHTML = done.length ? done.map(c => {
+            const detailHtml = c.detail.map(item => `
+                <div class="flex items-start gap-1 text-emerald-700 text-[11px] mt-0.5">
+                    <span class="shrink-0 select-none">•</span>
+                    <span class="break-all">${item}</span>
+                </div>
+            `).join('');
+
+            return `
+            <div class="bg-emerald-50 border border-emerald-100 rounded-xl p-3 flex items-start justify-between gap-3">
+                <div class="flex-1 min-w-0">
+                    <p class="text-sm font-semibold text-emerald-800">${c.name}</p>
+                    <p class="text-xs text-emerald-600 mt-0.5">${c.site}</p>
+                    <div class="mt-1.5 pt-1.5 border-t border-emerald-200/40">
+                        ${detailHtml}
+                    </div>
+                </div>
+                <span class="text-emerald-500 font-bold text-base shrink-0">✓</span>
+            </div>`
+        }).join('')
+        : '<p class="text-sm text-slate-400 text-center py-4">완료한 교육이 없습니다.</p>';
+
+        doneCards.classList.add('hidden');
+        doneOpen = false;
+        document.getElementById('doneToggleLabel').textContent = '↓ 펼치기';
+
+        document.getElementById('deptSection').classList.add('hidden');
+        deptOpen = false;
+        document.getElementById('deptToggleLabel').textContent = '펼치기 ↓';
+
+        document.getElementById('deptList').innerHTML = members.map(mem => {
+            const p = Math.round(mem.completions.length / courses.length * 100);
+            const isAll = mem.completions.length === courses.length;
+            const isMe = mem.id === m.id;
+            const bar = isAll ? 'bg-emerald-400' : p > 50 ? 'bg-indigo-400' : 'bg-amber-400';
+            return `
+            <div class="flex items-center gap-3 rounded-lg px-2 py-1.5 ${isMe ? 'bg-indigo-50' : ''}">
+                <span class="text-xs w-28 shrink-0 truncate ${isMe ? 'font-bold text-indigo-800' : 'text-slate-600'}">
+                    ${mem.position} ${mem.name}${isMe ? ' ◀' : ''}
+                </span>
+                <div class="flex-1 bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                    <div class="h-full ${bar} rounded-full transition-all" style="width:${p}%"></div>
+                </div>
+                <span class="text-xs font-bold w-8 text-right ${isMe ? 'text-indigo-700' : isAll ? 'text-emerald-600' : 'text-slate-500'}">${p}%</span>
+            </div>`;
+        }).join('');
+    }
+
+    function toggleDone() {
+        doneOpen = !doneOpen;
+        document.getElementById('doneCards').classList.toggle('hidden', !doneOpen);
+        document.getElementById('doneToggleLabel').textContent = doneOpen ? '↑ 접기' : '↓ 펼치기';
+    }
+
+    function toggleDept() {
+        deptOpen = !deptOpen;
+        document.getElementById('deptSection').classList.toggle('hidden', !deptOpen);
+        document.getElementById('deptToggleLabel').textContent = deptOpen ? '접기 ↑' : '펼치기 ↓';
+    }
+
+    loadData();
+</script>
+</body>
+</html>
