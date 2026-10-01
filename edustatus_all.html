@@ -255,7 +255,7 @@
                 '위 과정 중 1개 필수 이수'
             ]
         },
-    ];
+    ].sort((a, b) => a.deadline.localeCompare(b.deadline) || a.id - b.id);
 
     const initialMembers = [
         { id: 1,  name: '허미영', position: '행정5급',        completions: [1, 2] },
@@ -397,8 +397,7 @@
             allDone.classList.remove('hidden');
         } else {
             allDone.classList.add('hidden');
-            const sorted = [...todo].sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
-            todoContainer.innerHTML = sorted.map(c => {
+            todoContainer.innerHTML = todo.map(c => {
                 const d = getDday(c.deadline);
                 const urgent = d >= 0 && d <= 30;
                 
