@@ -7,7 +7,7 @@ import {createLocalEnvironment} from './local-storage.mjs';
 import {handleApi} from './api.mjs';
 
 const root=path.resolve(import.meta.dirname,'..');
-const allowed = new Set(['edustatus_all.html','edustatus_admin.html','edu-style.css','edu-client.mjs','edu-shared.mjs','edu-public.mjs','edu-admin.mjs','edu-workbook.mjs','edu-zip.mjs']);
+const allowed = new Set(['edustatus_all.html','edustatus_admin.html','edu-style.css','edu-client.mjs','edu-shared.mjs','edu-public.mjs','edu-admin.mjs','edu-department.mjs','edu-workbook.mjs','edu-zip.mjs']);
 const mime={'.html':'text/html; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8'};
 export async function startLocalServer({port=3198,host='127.0.0.1',dataDirectory=path.join(root,'.edu-data'),adminPassword,sessionSecret,seed}={}) {
   let variables={};

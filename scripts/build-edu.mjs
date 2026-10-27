@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 const root=path.resolve(import.meta.dirname,'..'),out=path.join(root,'web-dist');
-const files=['edustatus_all.html','edustatus_admin.html','edu-style.css','edu-client.mjs','edu-shared.mjs','edu-public.mjs','edu-admin.mjs','edu-workbook.mjs','edu-zip.mjs'];
+const files=['edustatus_all.html','edustatus_admin.html','edu-style.css','edu-client.mjs','edu-shared.mjs','edu-public.mjs','edu-admin.mjs','edu-department.mjs','edu-workbook.mjs','edu-zip.mjs'];
 // This directory is generated. Rebuild from the allowlist so stale files can
 // never accidentally become public assets.
 if(path.dirname(out)!==root||path.basename(out)!=='web-dist')throw new Error('빌드 경로를 확인하세요.');

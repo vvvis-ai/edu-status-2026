@@ -237,6 +237,77 @@ async function saveMemberOrder(request, env) {
   return json({memberOrder:{memberIds,version:item.version}});
 }
 
+function departmentChart(members, saved) {
+  const active = members.filter(member => member.active), activeIds = new Set(active.map(member => member.id));
+  let leaderId, configuredTeams;
+  if (saved) {
+    leaderId = activeIds.has(saved.leaderId) ? saved.leaderId : '';
+    configuredTeams = saved.teams;
+  } else {
+    const candidates = active.filter(member => [member.team,member.position].some(value => String(value || '').includes('과장')));
+    leaderId = candidates.length === 1 ? candidates[0].id : '';
+    const names = [...new Set(active.filter(member => member.id !== leaderId).map(member => String(member.team || '').trim()).filter(Boolean))].slice(0,4);
+    configuredTeams = names.map(name => ({name,memberIds:active.filter(member => member.id !== leaderId && String(member.team || '').trim() === name).map(member => member.id)}));
+  }
+  const usedNames = new Set((configuredTeams || []).map(team => team.name));
+  const assigned = new Set(leaderId ? [leaderId] : []);
+  const teams = Array.from({length:4},(_,index) => {
+    const configured = configuredTeams?.[index];
+    let name = configured?.name;
+    if (!name) {
+      let number = index+1;
+      while (usedNames.has(`${number}팀`)) number++;
+      name = `${number}팀`; usedNames.add(name);
+    }
+    const selected = new Set(configured?.memberIds || []);
+    // Assignment is independent of the separately editable number order.
+    const memberIds = active.filter(member => selected.has(member.id) && !assigned.has(member.id)).map(member => member.id);
+    memberIds.forEach(id => assigned.add(id));
+    return {id:`team-${index+1}`,name,memberIds};
+  });
+  return {leaderId,teams,unassignedMemberIds:active.filter(member => !assigned.has(member.id)).map(member => member.id),version:saved?.version || 0};
+}
+
+async function saveDepartmentChart(request, env) {
+  const body = await readJson(request), expectedVersion = version(body.version,true);
+  if (typeof body.leaderId !== 'string') fail(400,'과장 배치 정보를 확인해 주세요.');
+  const leaderId = body.leaderId ? cleanId(body.leaderId) : '';
+  if (!Array.isArray(body.teams) || body.teams.length !== 4) fail(400,'팀은 네 개를 지정해 주세요.');
+  const assignedIds = new Set(leaderId ? [leaderId] : []), names = new Set();
+  const teams = body.teams.map((team,index) => {
+    if (!team || typeof team !== 'object' || team.id !== `team-${index+1}` || !Array.isArray(team.memberIds) || team.memberIds.length > 2000) fail(400,'팀 식별번호와 부서원 배치를 확인해 주세요.');
+    const name = text(team.name,'팀 이름',100,true), nameKey = name.normalize('NFC').toLocaleLowerCase('ko');
+    if (names.has(nameKey)) fail(400,'팀 이름은 서로 다르게 입력해 주세요.');
+    names.add(nameKey);
+    const memberIds = team.memberIds.map(cleanId);
+    for (const id of memberIds) {
+      if (assignedIds.has(id)) fail(400,'한 부서원을 여러 위치에 중복 배치할 수 없습니다.');
+      assignedIds.add(id);
+    }
+    return {id:team.id,name,memberIds};
+  });
+  if (!Array.isArray(body.activeMemberIds) || body.activeMemberIds.length > 2000) fail(400,'현재 재직 명단을 확인해 주세요.');
+  const requestedActiveIds = body.activeMemberIds.map(cleanId), requestedSet = new Set(requestedActiveIds);
+  if (requestedSet.size !== requestedActiveIds.length) fail(400,'현재 재직 명단에 중복된 부서원이 있습니다.');
+  const [members,saved,savedOrder] = await Promise.all([all(env,'members'),get(env,'settings','department-chart'),get(env,'settings','member-order')]);
+  if ((saved?.version || 0) !== expectedVersion) conflict();
+  const allIds = new Set(members.map(member => member.id)), activeIds = members.filter(member => member.active).map(member => member.id), activeSet = new Set(activeIds);
+  if ([...assignedIds,...requestedActiveIds].some(id => !allIds.has(id))) fail(400,'명단에 없는 부서원이 포함되어 있습니다.');
+  if (requestedActiveIds.length !== activeIds.length || activeIds.some(id => !requestedSet.has(id))) conflict();
+  if ([...assignedIds].some(id => !activeSet.has(id))) fail(400,'재직 중인 부서원만 배치할 수 있습니다.');
+  const item = {id:'department-chart',leaderId,teams,version:expectedVersion+1,updatedAt:now(),nonce:uuid()};
+  const serializedIds = stringify(requestedActiveIds);
+  const activeSetGuard = "(SELECT COUNT(*) FROM records WHERE collection = 'members' AND json_extract(data,'$.active') = 1) = json_array_length(?) AND NOT EXISTS (SELECT 1 FROM records AS member WHERE member.collection = 'members' AND json_extract(member.data,'$.active') = 1 AND member.id NOT IN (SELECT value FROM json_each(?)))";
+  const versionGuard = "((? = 0 AND NOT EXISTS (SELECT 1 FROM records WHERE collection = 'settings' AND id = 'department-chart')) OR EXISTS (SELECT 1 FROM records WHERE collection = 'settings' AND id = 'department-chart' AND version = ?))";
+  const lock = {sql:"EXISTS (SELECT 1 FROM records WHERE collection = 'settings' AND id = 'department-chart' AND version = ? AND json_extract(data,'$.nonce') = ?)",values:[item.version,item.nonce]};
+  const results = await env.DB.batch([
+    env.DB.prepare(`INSERT INTO records(collection,id,data,version) SELECT 'settings','department-chart',?,? WHERE ${activeSetGuard} AND ${versionGuard} ON CONFLICT(collection,id) DO UPDATE SET data = excluded.data, version = excluded.version`).bind(stringify(item),item.version,serializedIds,serializedIds,expectedVersion,expectedVersion),
+    guardedInsert(env,'audit',auditItem('department_chart_updated',{leaderId,teams}),lock),
+  ]);
+  if (!changes(results[0])) conflict();
+  return json({departmentChart:departmentChart(memberOrdering(members,savedOrder).members,item)});
+}
+
 async function ensureEnrollment(env, memberId, courseId) {
   const id = pairId(memberId, courseId);
   const initial = {id, memberId, courseId, latestSubmissionId:'', revision:0, nonce:'', version:0};
@@ -557,9 +628,9 @@ async function route(request, env) {
   }
   if (!env.DB || !env.FILES) fail(503,'서버 저장소 연결이 필요합니다.');
   if (path==='/api/bootstrap' && request.method==='GET') {
-    const [courses,members,selected,savedOrder] = await Promise.all([all(env,'courses'),all(env,'members'),session(request,env,'member'),get(env,'settings','member-order')]);
+    const [courses,members,selected,savedOrder,savedChart] = await Promise.all([all(env,'courses'),all(env,'members'),session(request,env,'member'),get(env,'settings','member-order'),get(env,'settings','department-chart')]);
     const ordered = memberOrdering(members,savedOrder);
-    return json({courses:visibleCourses(courses),members:ordered.members.filter(member=>member.active).map(publicMember),selectedMemberId:members.some(member=>member.id===selected?.member_id && member.active) ? selected.member_id : null,serverTime:now()});
+    return json({courses:visibleCourses(courses),members:ordered.members.filter(member=>member.active).map(publicMember),departmentChart:departmentChart(ordered.members,savedChart),selectedMemberId:members.some(member=>member.id===selected?.member_id && member.active) ? selected.member_id : null,serverTime:now()});
   }
   if (path==='/api/member-session' && request.method==='POST') {
     const body = await readJson(request);
@@ -588,11 +659,12 @@ async function route(request, env) {
   if (path.startsWith('/api/admin/')) {
     await requireAdmin(request,env);
     if (path==='/api/admin/data' && request.method==='GET') {
-      const [courses,members,submissions,overrides,auditEntries,savedOrder] = await Promise.all([...['courses','members','submissions','overrides','audit'].map(collection=>all(env,collection)),get(env,'settings','member-order')]);
+      const [courses,members,submissions,overrides,auditEntries,savedOrder,savedChart] = await Promise.all([...['courses','members','submissions','overrides','audit'].map(collection=>all(env,collection)),get(env,'settings','member-order'),get(env,'settings','department-chart')]);
       const ordered = memberOrdering(members,savedOrder);
-      return json({courses,members:ordered.members,memberOrder:ordered.memberOrder,submissions,overrides,audit:auditEntries.sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,500),serverTime:now()});
+      return json({courses,members:ordered.members,memberOrder:ordered.memberOrder,departmentChart:departmentChart(ordered.members,savedChart),submissions,overrides,audit:auditEntries.sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,500),serverTime:now()});
     }
     if (path==='/api/admin/member-order' && request.method==='PUT') return saveMemberOrder(request,env);
+    if (path==='/api/admin/department-chart' && request.method==='PUT') return saveDepartmentChart(request,env);
     if (path==='/api/admin/courses' && request.method==='POST') return saveCourse(request,env);
     match = /^\/api\/admin\/courses\/([\w:-]+)$/.exec(path);
     if (match && request.method==='PUT') return saveCourse(request,env,match[1]);

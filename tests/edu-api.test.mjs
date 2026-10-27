@@ -10,6 +10,8 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR
 const timestamp = '2026-01-01T00:00:00.000Z';
 const course = (id,extra={}) => ({id,name:`교육 ${id}`,site:'교육원',url:'https://example.com/education',deadline:'2026-12-31',submissionDeadline:'2026-12-20',year:2026,periodType:'year',periodValue:0,details:['필수 과정'],requirement:'all',requirementNote:'',requestDepartment:'총무과',description:'',published:true,archived:false,targetMode:'all',targetMemberIds:[],exemptMemberIds:[],createdAt:timestamp,updatedAt:timestamp,version:1,...extra});
 const member = (id,extra={}) => ({id,name:`직원${id}`,position:'행정9급',team:'총무팀',active:true,joinedOn:'',leftOn:'',note:'내부메모',legacyCompletions:[],createdAt:timestamp,updatedAt:timestamp,version:1,...extra});
+const chartInput = ({leaderId='',teamMembers=[['m1'],['m2'],[],[]],names=[],activeMemberIds=['m1','m2'],version=0}={}) => ({leaderId,teams:Array.from({length:4},(_,index)=>({id:`team-${index+1}`,name:names[index] || `${index+1}팀`,memberIds:teamMembers[index] || []})),activeMemberIds,version});
+const chartPeople = chart => [...(chart.leaderId?[chart.leaderId]:[]),...chart.teams.flatMap(team=>team.memberIds),...chart.unassignedMemberIds];
 
 async function fixture(t,seed={courses:[course('c1')],members:[member('m1'),member('m2')]}) {
   const base = path.resolve('.verification');
@@ -214,6 +216,165 @@ test('member-order saving permits a concurrent team and position edit and uses b
   const data=await (await f.call('/admin/data',{cookie:admin})).json();
   const changed=data.members.find(value=>value.id==='m000');
   assert.equal(changed.team,'변경팀');assert.equal(changed.position,'변경직급');assert.equal(changed.version,2);
+});
+
+test('department chart infers one leader and the first four existing teams in current member-number order without hiding overflow',async t=>{
+  const members=[member('leader',{position:'가상과장',team:'과장실'}),member('a1',{team:'교육팀'}),member('a2',{team:'교육팀'}),member('b',{team:'운영팀'}),member('c',{team:'지원팀'}),member('d',{team:'시설팀'}),member('e',{team:'추가팀'}),member('none',{team:''}),member('left',{active:false,position:'과장'})];
+  const f=await fixture(t,{courses:[],members}),admin=await f.login();
+  const order=['b','a2','a1','leader','c','d','e','none'];
+  assert.equal((await f.call('/admin/member-order',{method:'PUT',cookie:admin,body:{memberIds:order,version:0}})).status,200);
+  const data=await (await f.call('/admin/data',{cookie:admin})).json();
+  const chart=data.departmentChart;
+  assert.equal(chart.version,0);assert.equal(chart.leaderId,'leader');
+  assert.deepEqual(chart.teams.map(team=>[team.id,team.name]),[['team-1','운영팀'],['team-2','교육팀'],['team-3','지원팀'],['team-4','시설팀']]);
+  assert.deepEqual(chart.teams[1].memberIds,['a2','a1']);
+  assert.deepEqual(chart.unassignedMemberIds,['e','none']);
+  assert.deepEqual(chartPeople(chart).sort(),order.slice().sort());
+  assert.deepEqual((await (await f.call('/bootstrap')).json()).departmentChart,chart);
+  assert.equal((await f.env.DB.prepare("SELECT COUNT(*) AS count FROM records WHERE collection = 'settings' AND id = 'department-chart'").first()).count,0);
+});
+
+test('department chart keeps the leader empty when absent or ambiguous and always supplies four unique team slots',async t=>{
+  const empty=await fixture(t,{courses:[],members:[member('m1',{team:''}),member('m2',{team:''})]});
+  const chart=(await (await empty.call('/bootstrap')).json()).departmentChart;
+  assert.equal(chart.leaderId,'');assert.deepEqual(chart.teams.map(team=>team.name),['1팀','2팀','3팀','4팀']);
+  assert.deepEqual(chart.unassignedMemberIds,['m1','m2']);
+  const ambiguous=await fixture(t,{courses:[],members:[member('m1',{position:'과장',team:'3팀'}),member('m2',{team:'과장실'})]});
+  const other=(await (await ambiguous.call('/bootstrap')).json()).departmentChart;
+  assert.equal(other.leaderId,'');assert.equal(new Set(other.teams.map(team=>team.name)).size,4);
+  assert.deepEqual(chartPeople(other).sort(),['m1','m2']);
+});
+
+test('department chart allows an explicitly empty manual layout and a roster with no active employees',async t=>{
+  const f=await fixture(t,{courses:[],members:[member('m1',{position:'과장'}),member('m2')]}),admin=await f.login();
+  assert.equal((await (await f.call('/bootstrap')).json()).departmentChart.leaderId,'m1');
+  const response=await f.call('/admin/department-chart',{method:'PUT',cookie:admin,body:chartInput({teamMembers:[[],[],[],[]]})});
+  assert.equal(response.status,200);
+  const chart=(await response.json()).departmentChart;
+  assert.equal(chart.leaderId,'');assert.equal(chart.version,1);assert.deepEqual(chart.unassignedMemberIds,['m1','m2']);
+  assert.ok(chart.teams.every(team=>team.memberIds.length===0));
+  assert.deepEqual((await (await f.call('/bootstrap')).json()).departmentChart,chart,'an explicit empty leader is preserved rather than inferred again');
+  const empty=await fixture(t,{courses:[],members:[member('left',{active:false})]}),emptyAdmin=await empty.login();
+  const saved=await empty.call('/admin/department-chart',{method:'PUT',cookie:emptyAdmin,body:chartInput({teamMembers:[[],[],[],[]],activeMemberIds:[]})});
+  assert.equal(saved.status,200);assert.deepEqual(chartPeople((await saved.json()).departmentChart),[]);
+});
+
+test('department chart requires admin authentication and same-origin requests and validates team/leader placement and current roster',async t=>{
+  const f=await fixture(t,{courses:[],members:[member('m1'),member('m2'),member('left',{active:false})]}),admin=await f.login(),selected=await f.select();
+  assert.equal((await f.call('/admin/department-chart',{method:'PUT',body:chartInput()})).status,401);
+  assert.equal((await f.call('/admin/department-chart',{method:'PUT',cookie:selected,body:chartInput()})).status,401);
+  assert.equal((await f.call('/admin/department-chart',{method:'PUT',cookie:admin,origin:'https://other.example',body:chartInput()})).status,403);
+  const invalid=[];
+  const add=(change,status=400)=>{const body=chartInput();change(body);invalid.push([body,status]);};
+  add(body=>{delete body.leaderId;});add(body=>{body.leaderId='unknown';});add(body=>{body.leaderId='left';});
+  add(body=>{body.leaderId='m1';});add(body=>{body.teams[1].memberIds=['m1'];});add(body=>{body.teams[0].memberIds=['m1','m1'];});
+  add(body=>{body.teams[0].memberIds=['unknown'];});add(body=>{body.teams[0].memberIds=['left'];});
+  add(body=>{body.teams.pop();});add(body=>{body.teams.push({id:'team-5',name:'5팀',memberIds:[]});});
+  add(body=>{body.teams.reverse();});add(body=>{body.teams[1].id='team-1';});
+  add(body=>{body.teams[0].name=' ';});add(body=>{body.teams[0].name='가'.repeat(101);});
+  add(body=>{body.teams[1].name=' 1팀 ';});add(body=>{body.teams[0].name='Team';body.teams[1].name='team';});
+  add(body=>{delete body.activeMemberIds;});add(body=>{body.activeMemberIds=['m1','m1'];});add(body=>{body.activeMemberIds=['m1','unknown'];});
+  add(body=>{body.activeMemberIds=['m1'];},409);add(body=>{body.activeMemberIds.push('left');},409);
+  add(body=>{delete body.version;});add(body=>{body.version=1;},409);
+  for(const [body,status] of invalid)assert.equal((await f.call('/admin/department-chart',{method:'PUT',cookie:admin,body})).status,status);
+  assert.equal((await f.env.DB.prepare("SELECT COUNT(*) AS count FROM records WHERE collection IN ('settings','audit')").first()).count,0);
+});
+
+test('department chart persists canonical placement and audit separately from number order, employees, completions and original files',async t=>{
+  const f=await fixture(t,{courses:[course('c1')],members:[member('m1'),member('m2',{legacyCompletions:['c1']}),member('m3')]}),admin=await f.login(),selected=await f.select();
+  assert.equal((await f.call('/admin/member-order',{method:'PUT',cookie:admin,body:{memberIds:['m3','m2','m1'],version:0}})).status,200);
+  const submitted=await f.call('/submissions',{method:'POST',cookie:selected,body:f.form({file:PNG,name:'가상수료증.png',type:'image/png'})});
+  assert.equal(submitted.status,201);const submission=(await submitted.json()).submission;
+  const snapshot=()=>f.env.DB.prepare("SELECT collection,id,data,version FROM records WHERE collection != 'audit' AND NOT (collection = 'settings' AND id = 'department-chart') ORDER BY collection,id").all();
+  const before=(await snapshot()).results;
+  const body=chartInput({leaderId:'m2',teamMembers:[['m1'],[],[],[]],names:[' 교육팀 ','운영팀','지원팀','시설팀'],activeMemberIds:['m1','m2','m3']});
+  const response=await f.call('/admin/department-chart',{method:'PUT',cookie:admin,body});
+  assert.equal(response.status,200);
+  const chart=(await response.json()).departmentChart;
+  assert.equal(chart.leaderId,'m2');assert.equal(chart.version,1);assert.equal(chart.teams[0].name,'교육팀');
+  assert.deepEqual(chart.teams[0].memberIds,['m1']);assert.deepEqual(chart.unassignedMemberIds,['m3']);
+  assert.deepEqual(chartPeople(chart).sort(),['m1','m2','m3']);
+  assert.deepEqual((await snapshot()).results,before);
+  const data=await (await f.call('/admin/data',{cookie:admin})).json();
+  assert.deepEqual(data.departmentChart,chart);assert.deepEqual(data.memberOrder,{memberIds:['m3','m2','m1'],version:1});
+  const audit=data.audit.filter(value=>value.action==='department_chart_updated');assert.equal(audit.length,1);assert.equal(audit[0].detail.leaderId,'m2');
+  const original=await f.call(`/files/${submission.files[0].id}`,{cookie:selected});assert.deepEqual(Buffer.from(await original.arrayBuffer()),PNG);
+});
+
+test('saved department assignments follow later member-number changes and expose added and transferred employees without omissions',async t=>{
+  const f=await fixture(t,{courses:[],members:[member('m1'),member('m2'),member('m3'),member('m4')]}),admin=await f.login();
+  const body=chartInput({leaderId:'m3',teamMembers:[['m2','m1'],[],[],[]],activeMemberIds:['m1','m2','m3','m4']});
+  const response=await f.call('/admin/department-chart',{method:'PUT',cookie:admin,body});
+  assert.equal(response.status,200);assert.deepEqual((await response.json()).departmentChart.teams[0].memberIds,['m1','m2']);
+  const savedBefore=await f.env.DB.prepare("SELECT data FROM records WHERE collection = 'settings' AND id = 'department-chart'").first();
+  assert.equal((await f.call('/admin/member-order',{method:'PUT',cookie:admin,body:{memberIds:['m4','m2','m1','m3'],version:0}})).status,200);
+  const reordered=(await (await f.call('/bootstrap')).json()).departmentChart;
+  assert.deepEqual(reordered.teams[0].memberIds,['m2','m1']);assert.deepEqual(reordered.unassignedMemberIds,['m4']);assert.equal(reordered.version,1);
+  assert.deepEqual(await f.env.DB.prepare("SELECT data FROM records WHERE collection = 'settings' AND id = 'department-chart'").first(),savedBefore);
+  const newResponse=await f.call('/admin/members',{method:'POST',cookie:admin,body:{name:'가상신규직원',active:true}});assert.equal(newResponse.status,201);
+  const newcomer=(await newResponse.json()).member;
+  let current=(await (await f.call('/bootstrap')).json()).departmentChart;
+  assert.deepEqual(current.unassignedMemberIds,['m4',newcomer.id]);
+  assert.equal((await f.call('/admin/members/m3',{method:'PUT',cookie:admin,body:{...member('m3'),active:false,leftOn:'2026-10-01'}})).status,200);
+  assert.equal((await f.call('/admin/members/m2',{method:'PUT',cookie:admin,body:{...member('m2'),active:false,leftOn:'2026-10-01'}})).status,200);
+  current=(await (await f.call('/bootstrap')).json()).departmentChart;
+  assert.equal(current.leaderId,'');assert.deepEqual(current.teams[0].memberIds,['m1']);assert.equal(current.version,1);
+  assert.deepEqual(chartPeople(current).sort(),['m1','m4',newcomer.id].sort());
+  assert.equal((await f.call('/admin/department-chart',{method:'PUT',cookie:admin,body:{...body,version:1}})).status,409);
+});
+
+test('concurrent initial and subsequent department-chart saves accept one version and create one audit each',async t=>{
+  const f=await fixture(t),admin=await f.login();
+  for(const expectedVersion of [0,1]) {
+    const batch=f.env.DB.batch.bind(f.env.DB);let calls=0,release;const barrier=new Promise(resolve=>{release=resolve;});
+    f.env.DB.batch=async statements=>{if(++calls===2)release();await barrier;return batch(statements);};
+    const responses=await Promise.all([
+      f.call('/admin/department-chart',{method:'PUT',cookie:admin,body:chartInput({version:expectedVersion})}),
+      f.call('/admin/department-chart',{method:'PUT',cookie:admin,body:chartInput({leaderId:'m2',teamMembers:[['m1'],[],[],[]],version:expectedVersion})}),
+    ]);
+    f.env.DB.batch=batch;assert.deepEqual(responses.map(value=>value.status).sort(),[200,409]);
+    const winner=(await responses.find(value=>value.status===200).json()).departmentChart;
+    const data=await (await f.call('/admin/data',{cookie:admin})).json();
+    assert.deepEqual(data.departmentChart,winner);assert.equal(data.departmentChart.version,expectedVersion+1);
+    assert.equal(data.audit.filter(value=>value.action==='department_chart_updated').length,expectedVersion+1);
+    assert.equal(data.memberOrder.version,0);
+  }
+});
+
+for(const rosterChange of ['addition','transfer','replacement']) test(`department-chart atomic guard rejects a concurrent roster ${rosterChange} without changing its placement or audit`,async t=>{
+  const f=await fixture(t),admin=await f.login();
+  assert.equal((await f.call('/admin/department-chart',{method:'PUT',cookie:admin,body:chartInput()})).status,200);
+  const before=await f.env.DB.prepare("SELECT data FROM records WHERE collection = 'settings' AND id = 'department-chart'").first();
+  const batch=f.env.DB.batch.bind(f.env.DB);let changed=false;
+  f.env.DB.batch=async statements=>{
+    if(!changed) {
+      changed=true;const mutations=[];
+      if(rosterChange!=='transfer')mutations.push(f.env.DB.prepare('INSERT INTO records(collection,id,data,version) VALUES(?,?,?,?)').bind('members','m3',JSON.stringify(member('m3')),1));
+      if(rosterChange!=='addition')mutations.push(f.env.DB.prepare("UPDATE records SET data = ?, version = 2 WHERE collection = 'members' AND id = 'm2'").bind(JSON.stringify(member('m2',{active:false,version:2}))));
+      await batch(mutations);
+    }
+    return batch(statements);
+  };
+  const response=await f.call('/admin/department-chart',{method:'PUT',cookie:admin,body:chartInput({version:1})});
+  assert.equal(response.status,409);assert.equal((await response.json()).code,'VERSION_CONFLICT');
+  assert.deepEqual(await f.env.DB.prepare("SELECT data FROM records WHERE collection = 'settings' AND id = 'department-chart'").first(),before);
+  assert.equal((await f.env.DB.prepare("SELECT COUNT(*) AS count FROM records WHERE collection = 'audit' AND json_extract(data,'$.action') = 'department_chart_updated'").first()).count,1);
+});
+
+test('department-chart saving supports large active rosters with bounded SQL parameters and permits concurrent personnel-field edits',async t=>{
+  const members=Array.from({length:125},(_,index)=>member(`m${String(index).padStart(3,'0')}`));
+  const f=await fixture(t,{courses:[],members}),admin=await f.login();
+  const prepare=f.env.DB.prepare.bind(f.env.DB),batch=f.env.DB.batch.bind(f.env.DB);let changed=false;
+  f.env.DB.prepare=sql=>{const statement=prepare(sql),bind=statement.bind.bind(statement);statement.bind=(...values)=>{assert.ok(values.length<100);return bind(...values);};return statement;};
+  f.env.DB.batch=async statements=>{
+    if(!changed){changed=true;await batch([prepare("UPDATE records SET data = ?, version = 2 WHERE collection = 'members' AND id = 'm000'").bind(JSON.stringify(member('m000',{team:'변경팀',position:'변경직급',version:2})))]);}
+    return batch(statements);
+  };
+  const ids=members.map(value=>value.id),body=chartInput({teamMembers:[ids.slice(0,30),ids.slice(30,60),ids.slice(60,90),ids.slice(90,120)],activeMemberIds:ids});
+  const response=await f.call('/admin/department-chart',{method:'PUT',cookie:admin,body});assert.equal(response.status,200);
+  const chart=(await response.json()).departmentChart;assert.equal(chartPeople(chart).length,125);assert.equal(new Set(chartPeople(chart)).size,125);assert.equal(chart.unassignedMemberIds.length,5);
+  const data=await (await f.call('/admin/data',{cookie:admin})).json(),edited=data.members.find(value=>value.id==='m000');
+  assert.equal(edited.team,'변경팀');assert.equal(edited.position,'변경직급');assert.equal(edited.version,2);
 });
 
 test('personnel history requires an administrator and distinguishes missing members from empty history',async t=>{

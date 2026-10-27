@@ -6,6 +6,7 @@ import {
   getLatestSubmission, getStatus, getProgress, matchesPeriod,
   isNewCourse, STATUS_LABELS,
 } from './edu-shared.mjs';
+import {departmentMarkup} from './edu-department.mjs';
 
 const $ = (selector, scope = document) => scope.querySelector(selector);
 const $$ = (selector, scope = document) => [...scope.querySelectorAll(selector)];
@@ -22,6 +23,10 @@ let memberOrderVersion = 0;
 let memberOrderBusy = false;
 let memberOrderDraggingId = null;
 let memberOrderRendering = false;
+let departmentChartDraft = null;
+let departmentChartVersion = 0;
+let departmentActiveIds = [];
+let departmentChartBusy = false;
 let loading = false;
 
 function setError(element, message) { element.textContent = message || ''; element.hidden = !message; }
@@ -215,6 +220,71 @@ async function saveMemberOrder(event) {
   } catch (error) {
     setError($('#memberOrderError'), error.status === 409 ? `${error.message} ‘최신 순서 불러오기’를 누른 뒤 다시 편집해 주세요.` : error.message);
   } finally { memberOrderBusy = false; busy($('#saveMemberOrderButton'), false); renderMemberOrder(); }
+}
+function resetDepartmentChartDraft() {
+  const chart = data.departmentChart;
+  departmentChartDraft = {
+    leaderId:chart?.leaderId || '',
+    teams:Array.from({length:4}, (_, index) => {
+      const team = chart?.teams?.[index];
+      return {id:`team-${index + 1}`,name:team?.name || `${index + 1}팀`,memberIds:[...(team?.memberIds || [])]};
+    }),
+  };
+  departmentChartVersion = chart?.version || 0;
+  departmentActiveIds = data.members.filter(member => member.active).map(member => member.id);
+}
+function renderDepartmentPreview() {
+  if (!departmentChartDraft) return;
+  const preview = departmentMarkup(data.members, departmentChartDraft, {selectable:false});
+  $('#departmentChartPreview').innerHTML = preview.html;
+  $('#departmentAssignmentCount').textContent = `재직 ${departmentActiveIds.length}명 · 팀 배치 대기 ${preview.unassignedCount}명`;
+}
+function renderDepartmentAssignments() {
+  $('#departmentAssignmentBody').innerHTML = data.members.filter(member => member.active).map(member => {
+    const isLeader = departmentChartDraft.leaderId === member.id;
+    const assigned = departmentChartDraft.teams.find(team => team.memberIds.includes(member.id))?.id || '';
+    const options = isLeader ? '<option value="leader">과장</option>' : `<option value="">팀 배치 대기</option>${departmentChartDraft.teams.map((team, index) => `<option value="${e(team.id)}" data-department-option="${e(team.id)}" ${assigned === team.id ? 'selected' : ''}>${e(team.name || `${index + 1}팀`)}</option>`).join('')}`;
+    return `<tr><td><strong>${e(member.name)}</strong><small>${e([member.team,member.position].filter(Boolean).join(' · ') || '팀·직급 미등록')}</small></td><td><select data-department-member="${e(member.id)}" aria-label="${e(member.name)} 조직도 배치" ${isLeader || departmentChartBusy ? 'disabled' : ''}>${options}</select></td></tr>`;
+  }).join('');
+}
+function renderDepartmentChartEditor() {
+  if (!departmentChartDraft) return;
+  $('#departmentLeader').innerHTML = `<option value="">과장 미지정</option>${data.members.filter(member => member.active).map(member => `<option value="${e(member.id)}">${e(member.name)}${member.team || member.position ? ` · ${e([member.team,member.position].filter(Boolean).join(' · '))}` : ''}</option>`).join('')}`;
+  $('#departmentLeader').value = departmentChartDraft.leaderId;
+  $('#departmentTeamFields').innerHTML = departmentChartDraft.teams.map((team,index) => `<div class="field"><label for="departmentTeam${index + 1}">${index + 1}번째 팀 이름</label><input id="departmentTeam${index + 1}" data-department-team="${e(team.id)}" value="${e(team.name)}" required maxlength="100"></div>`).join('');
+  renderDepartmentAssignments(); renderDepartmentPreview();
+  for (const control of $$('input,select,button', $('#departmentChartDialog'))) {
+    control.disabled = departmentChartBusy || control.dataset.departmentMember === departmentChartDraft.leaderId;
+  }
+}
+function openDepartmentChart() {
+  if (loading) { showToast('최신 명단을 불러오는 중입니다. 잠시 후 다시 선택해 주세요.', 'info'); return; }
+  resetDepartmentChartDraft(); setError($('#departmentChartError'), '');
+  renderDepartmentChartEditor(); openDialog($('#departmentChartDialog'));
+}
+async function reloadDepartmentChart() {
+  if (departmentChartBusy || loading) return;
+  departmentChartBusy = true; renderDepartmentChartEditor(); setError($('#departmentChartError'), '');
+  try { await loadData(); resetDepartmentChartDraft(); }
+  catch (error) { setError($('#departmentChartError'), error.message); }
+  finally { departmentChartBusy = false; renderDepartmentChartEditor(); }
+}
+async function saveDepartmentChart(event) {
+  event.preventDefault(); if (departmentChartBusy) return;
+  if (!$('#departmentChartForm').reportValidity()) return;
+  const teams = departmentChartDraft.teams.map(team => ({...team,name:team.name.trim(),memberIds:[...team.memberIds]}));
+  if (teams.some(team => !team.name) || new Set(teams.map(team => team.name)).size !== 4) {
+    setError($('#departmentChartError'), '4개 팀의 이름을 서로 다르게 입력해 주세요.'); return;
+  }
+  departmentChartBusy = true; renderDepartmentChartEditor(); setError($('#departmentChartError'), '');
+  busy($('#saveDepartmentChartButton'), true, '조직도를 저장하고 있습니다…');
+  try {
+    await api('/admin/department-chart', {method:'PUT',body:{leaderId:departmentChartDraft.leaderId,teams,activeMemberIds:[...departmentActiveIds],version:departmentChartVersion}});
+    closeDialog($('#departmentChartDialog')); showToast('조직도를 저장했습니다. 교육 안내 페이지를 새로고침하면 반영됩니다.');
+    try { await loadData(); } catch { showToast('조직도는 저장됐습니다. 최신 명단을 보려면 새로고침해 주세요.', 'info'); }
+  } catch (error) {
+    setError($('#departmentChartError'), error.status === 409 ? `${error.message} ‘최신 조직도 불러오기’를 누른 뒤 다시 편집해 주세요.` : error.message);
+  } finally { departmentChartBusy = false; busy($('#saveDepartmentChartButton'), false); renderDepartmentChartEditor(); }
 }
 function statusRows() {
   return {courses: publishedCourses(), members: data.members.filter(member => member.active && includesQuery(member.name, member.team, member.position))};
@@ -495,6 +565,33 @@ $('#adminSearch').addEventListener('input', render);
 $('#newCourseButton').addEventListener('click', () => openCourse());
 $('#newMemberButton').addEventListener('click', () => openMember());
 $('#editMemberOrderButton').addEventListener('click', openMemberOrder);
+$('#editDepartmentChartButton').addEventListener('click', openDepartmentChart);
+$('#reloadDepartmentChartButton').addEventListener('click', reloadDepartmentChart);
+$('#departmentChartForm').addEventListener('submit', saveDepartmentChart);
+$('#departmentChartDialog').addEventListener('cancel', event => { if (departmentChartBusy) event.preventDefault(); });
+$('#departmentLeader').addEventListener('change', event => {
+  if (departmentChartBusy) return;
+  departmentChartDraft.leaderId = event.target.value;
+  for (const team of departmentChartDraft.teams) team.memberIds = team.memberIds.filter(id => id !== departmentChartDraft.leaderId);
+  renderDepartmentAssignments(); renderDepartmentPreview();
+});
+$('#departmentTeamFields').addEventListener('input', event => {
+  const id = event.target.dataset.departmentTeam;
+  if (!id || departmentChartBusy) return;
+  const index = departmentChartDraft.teams.findIndex(team => team.id === id);
+  if (index < 0) return;
+  departmentChartDraft.teams[index].name = event.target.value;
+  for (const option of $$('[data-department-option]')) if (option.dataset.departmentOption === id) option.textContent = event.target.value || `${index + 1}팀`;
+  renderDepartmentPreview();
+});
+$('#departmentAssignmentBody').addEventListener('change', event => {
+  const id = event.target.dataset.departmentMember;
+  if (!id || id === departmentChartDraft.leaderId || departmentChartBusy) return;
+  for (const team of departmentChartDraft.teams) team.memberIds = team.memberIds.filter(memberId => memberId !== id);
+  const target = departmentChartDraft.teams.find(team => team.id === event.target.value);
+  if (target) target.memberIds.push(id);
+  renderDepartmentPreview();
+});
 $('#reloadMemberOrderButton').addEventListener('click', reloadMemberOrder);
 $('#memberOrderForm').addEventListener('submit', saveMemberOrder);
 $('#memberOrderDialog').addEventListener('cancel', event => { if (memberOrderBusy) event.preventDefault(); });

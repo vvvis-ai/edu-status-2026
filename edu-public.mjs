@@ -6,6 +6,7 @@ import {
   getLatestSubmission, getStatus, getProgress, matchesPeriod, isNewCourse,
   MAX_FILE_BYTES, MAX_TOTAL_BYTES, MAX_FILES, FILE_ACCEPT,
 } from './edu-shared.mjs';
+import {departmentMarkup} from './edu-department.mjs';
 
 const $ = (id) => document.getElementById(id);
 const state = {
@@ -62,11 +63,10 @@ function renderPage() {
 
 function renderNames() {
   const members = (state.bootstrap?.members || []).filter((member) => member.active !== false);
-  const search = state.search.trim().toLocaleLowerCase('ko');
-  const filtered = members.filter((member) => [member.name, member.team, member.position].some((value) => String(value || '').toLocaleLowerCase('ko').includes(search)));
+  const tree = departmentMarkup(members, state.bootstrap?.departmentChart, {search:state.search});
   $('memberCount').textContent = `총 ${members.length}명`;
-  $('memberGrid').innerHTML = filtered.map((member) => `<button type="button" class="name-card" data-select-member="${esc(member.id)}"><strong>${esc(member.name)}</strong><small>${esc([member.team, member.position].filter(Boolean).join(' · ') || '부서원')}</small></button>`).join('');
-  $('memberEmpty').hidden = filtered.length > 0;
+  $('memberGrid').innerHTML = tree.html;
+  $('memberEmpty').hidden = tree.matchCount > 0;
 }
 
 async function selectMember(memberId, button) {
