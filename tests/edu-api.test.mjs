@@ -386,3 +386,47 @@ test('approved ZIP respects manual approval of the latest attached submission',a
   assert.ok(bytes.includes(Buffer.from(PDF)));
   assert.ok(bytes.includes(Buffer.from('승인')));
 });
+
+test('eventual storage accepts its write receipt and distinguishes propagation from missing or unauthorized files',async t=>{
+  const f=await fixture(t),cookie=await f.select(),admin=await f.login();
+  let visible=false,heads=0;
+  const head=f.env.FILES.head.bind(f.env.FILES),get=f.env.FILES.get.bind(f.env.FILES);
+  f.env.FILES.consistency='eventual';
+  f.env.FILES.head=async key=>{heads++;return visible ? head(key):null;};
+  f.env.FILES.get=async key=>visible ? get(key):null;
+  const response=await f.call('/submissions',{method:'POST',cookie,body:f.form({file:PNG,name:'원본.png',type:'image/png'})});
+  assert.equal(response.status,201);
+  assert.equal(heads,0,'a successful KV write is not incorrectly rolled back by an immediate read');
+  const submission=(await response.json()).submission,fileId=submission.files[0].id;
+  const pending=await f.call(`/files/${fileId}`,{cookie});
+  assert.equal(pending.status,503);assert.equal(pending.headers.get('Retry-After'),'5');
+  assert.equal((await pending.json()).code,'FILE_PROPAGATING');
+  assert.equal((await f.call(`/files/${fileId}`,{cookie:await f.select('m2')})).status,403);
+  assert.equal((await f.call(`/admin/submissions/${submission.id}/review`,{method:'POST',cookie:admin,body:{status:'approved',reviewNote:'확인',version:1}})).status,200);
+  const zipPending=await f.call('/admin/courses/c1/download?scope=approved',{cookie:admin});
+  assert.equal(zipPending.status,503);assert.equal((await zipPending.json()).code,'FILE_PROPAGATING');
+  assert.equal((await f.env.DB.prepare("SELECT COUNT(*) AS count FROM records WHERE collection='audit' AND json_extract(data,'$.action')='certificates_downloaded'").first()).count,0);
+  visible=true;
+  const original=await f.call(`/files/${fileId}`,{cookie});
+  assert.equal(original.status,200);assert.deepEqual(Buffer.from(await original.arrayBuffer()),PNG);
+  const zip=await f.call('/admin/courses/c1/download?scope=approved',{cookie:admin});
+  assert.equal(zip.status,200);assert.ok(Buffer.from(await zip.arrayBuffer()).includes(PNG));
+  visible=false;
+  const row=await f.env.DB.prepare("SELECT data FROM records WHERE collection='files' AND id=?").bind(fileId).first();
+  const file={...JSON.parse(row.data),createdAt:'2020-01-01T00:00:00.000Z'};
+  await f.env.DB.prepare("UPDATE records SET data=? WHERE collection='files' AND id=?").bind(JSON.stringify(file),fileId).run();
+  const missing=await f.call(`/files/${fileId}`,{cookie});
+  assert.equal(missing.status,404);assert.equal(missing.headers.has('Retry-After'),false);
+  assert.equal((await f.call('/admin/courses/c1/download?scope=approved',{cookie:admin})).status,409);
+  assert.equal((await (await f.call('/me',{cookie})).json()).submissions.length,1);
+});
+
+test('eventual storage without a counted write receipt rejects reception and cleans the attempted upload',async t=>{
+  const f=await fixture(t),cookie=await f.select(),put=f.env.FILES.put.bind(f.env.FILES),head=f.env.FILES.head.bind(f.env.FILES),keys=[];
+  f.env.FILES.consistency='eventual';
+  f.env.FILES.put=async(...args)=>{await put(...args);keys.push(args[0]);return undefined;};
+  const response=await f.call('/submissions',{method:'POST',cookie,body:f.form({file:PNG,name:'원본.png',type:'image/png'})});
+  assert.equal(response.status,503);assert.equal((await response.json()).code,'FILE_STORAGE_CHANGED');
+  assert.deepEqual(await Promise.all(keys.map(head)),[null]);
+  assert.equal((await (await f.call('/me',{cookie})).json()).submissions.length,0);
+});

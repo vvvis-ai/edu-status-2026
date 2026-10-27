@@ -1,6 +1,6 @@
 import {
   api, escapeHtml as e, formatDate, formatTime, formatBytes, showToast,
-  openDialog, closeDialog, downloadFile, downloadXlsx, statusBadge,
+  openDialog, closeDialog, downloadFile, downloadXlsx, statusBadge, fetchStoredFile,
 } from './edu-client.mjs';
 import {
   getLatestSubmission, getStatus, getProgress, matchesPeriod,
@@ -310,8 +310,9 @@ async function previewFile(id) {
   const preview = $('#filePreview'); preview.innerHTML = '<div class="empty-state" role="status">수료증 파일을 불러오고 있습니다.</div>';
   $('#fileDownloadActions').innerHTML = `<button type="button" class="button secondary" data-file-download="${e(id)}">파일 내려받기</button>`;
   try {
-    const response = await fetch(filePath(id), {credentials: 'same-origin', signal: controller.signal});
-    if (!response.ok) { const result = await response.json().catch(() => ({})); throw new Error(result.error || '수료증 파일을 불러오지 못했습니다.'); }
+    const response = await fetchStoredFile(filePath(id), {signal: controller.signal, onRetry: () => {
+      if (previewController === controller && $('#reviewDialog').open) preview.innerHTML = '<div class="empty-state" role="status">파일을 저장소에 반영 중입니다. 잠시 후 다시 확인합니다.</div>';
+    }});
     const blob = await response.blob();
     if (previewController !== controller || !$('#reviewDialog').open) return;
     previewUrl = URL.createObjectURL(blob); preview.replaceChildren();

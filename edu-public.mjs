@@ -1,6 +1,6 @@
 import {
   api, escapeHtml as esc, formatDate, formatTime, formatBytes, showToast,
-  openDialog, closeDialog, statusBadge,
+  openDialog, closeDialog, statusBadge, fetchStoredFile,
 } from './edu-client.mjs';
 import {
   getLatestSubmission, getStatus, getProgress, matchesPeriod, isNewCourse,
@@ -358,24 +358,23 @@ $('historyContent').addEventListener('click', async (event) => {
   const button = event.target.closest('[data-preview-saved]'); if (!button) return;
   const file = selectedSavedFile(button.dataset.previewSaved); if (!file) return;
   button.disabled = true;
+  state.previewController?.abort();
   const controller = new AbortController();
   state.previewController = controller;
   $('previewFileName').textContent = file.name;
   $('previewContent').innerHTML = '<p class="empty-state" role="status">수료증 파일을 불러오고 있습니다.</p>';
   openDialog($('previewDialog'));
   try {
-    const response = await fetch(fileUrl(file.id), { credentials: 'same-origin', signal: controller.signal });
-    if (!response.ok) {
-      const result = await response.json().catch(() => ({}));
-      throw new Error(result.error || '수료증 파일을 불러오지 못했습니다.');
-    }
+    const response = await fetchStoredFile(fileUrl(file.id), {signal: controller.signal, onRetry: () => {
+      if (state.previewController === controller && $('previewDialog').open) $('previewContent').innerHTML = '<p class="empty-state" role="status">파일을 저장소에 반영 중입니다. 잠시 후 다시 확인합니다.</p>';
+    }});
     const blob = await response.blob();
     if (!($('previewDialog').open) || state.previewController !== controller) return;
     if (state.savedPreviewUrl) URL.revokeObjectURL(state.savedPreviewUrl);
     state.savedPreviewUrl = URL.createObjectURL(blob);
     previewFile(file, state.savedPreviewUrl);
   } catch (error) {
-    if (error.name !== 'AbortError') $('previewContent').innerHTML = `<p class="inline-error" role="alert">${esc(error.message)}</p>`;
+    if (error.name !== 'AbortError' && state.previewController === controller && $('previewDialog').open) $('previewContent').innerHTML = `<p class="inline-error" role="alert">${esc(error.message)}</p>`;
   } finally {
     if (state.previewController === controller) state.previewController = null;
     button.disabled = false;

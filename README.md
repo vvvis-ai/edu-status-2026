@@ -30,13 +30,15 @@ npm run cf:types
 npm run deploy:dry-run
 ```
 
-Node 서버는 SQLite와 로컬 파일을 사용하고, Cloudflare Worker는 D1과 R2를 사용합니다. 두 서버가 같은 API 코드를 공유합니다. `build`는 허용된 웹 파일과 보안헤더만 `web-dist`에 만들고, `deploy:dry-run`은 업로드 없이 번들·설정을 검사합니다. 전용 D1과 스키마 연결은 완료했으며, R2 계정 활성화 후 버킷 생성·실제 이관·Worker 배포를 이어갑니다. `npm run deploy`는 빌드 후 로컬 `.dev.vars`의 서버 secret을 같은 배포에 설정합니다. [최종 배포 진행 상태](docs/최종배포_진행상태.md)를 확인하세요.
+Node 서버는 SQLite와 로컬 파일을 사용하고, Cloudflare Worker는 D1에 현황·이력을, Workers KV에 수료증 원본을 저장합니다. 두 서버가 같은 API 코드를 공유합니다. 사용자의 KV 전환 승인에 따라 전용 D1과 KV namespace를 연결했습니다. `build`는 허용된 웹 파일과 보안헤더만 `web-dist`에 만들고, `deploy:dry-run`은 업로드 없이 번들·설정을 검사합니다. `npm run deploy`는 빌드 후 로컬 `.dev.vars`의 서버 secret을 같은 배포에 설정합니다. [최종 배포 진행 상태](docs/최종배포_진행상태.md)를 확인하세요.
+
+Workers Free의 KV 저장 제공량은 1GB, 쓰기는 하루 1,000키입니다. 재제출한 이전 원본도 계속 보존하므로 용량과 쓰기 사용량에 누적됩니다. 파일 조회는 지역에 따라 60초 이상 늦게 반영될 수 있습니다. 계정 내 다른 KV 사용량을 포함한 한도와 대처 방법은 [운영안내](docs/운영안내.md)의 KV 항목을 확인하세요.
 
 로컬 Workers의 스키마·가상 seed 준비, 비공개 이관 SQL, 백업·복구, 배포 절차는 [운영안내](docs/운영안내.md)를 참고하세요.
 
 ## GitHub Pages와 API
 
-이 개발본의 HTML만 GitHub Pages에 올리면 `/api/bootstrap` 같은 API 요청을 처리할 서버가 없어 오류가 납니다. 수료증 업로드·원본 저장·관리자 세션도 동작하지 않습니다. 새 화면은 로컬 서버 또는 D1/R2가 연결된 Worker의 동일한 주소에서 실행해야 합니다. 기존 GitHub Pages 운영 화면에 대한 새 기능 배포는 아직 수행하지 않았습니다.
+이 개발본의 HTML만 GitHub Pages에 올리면 `/api/bootstrap` 같은 API 요청을 처리할 서버가 없어 오류가 납니다. 수료증 업로드·원본 저장·관리자 세션도 동작하지 않습니다. 새 화면은 로컬 서버 또는 D1/KV가 연결된 Worker의 동일한 주소에서 실행해야 합니다. 기존 GitHub Pages 운영 화면에 대한 새 기능 배포는 아직 수행하지 않았습니다.
 
 Worker 주소를 확정하면 공개 `deployment.json`의 `workerOrigin`을 채우고 `npm run build:pages`로 연결 페이지 3개를 생성합니다. Pages workflow는 이 연결 페이지만 게시하여 기존 부서원/관리자 주소를 Worker의 해당 화면으로 이동시킵니다. [Pages 연결안내](docs/Pages_연결안내.md)의 publishing source 전환 순서를 확인하세요.
 

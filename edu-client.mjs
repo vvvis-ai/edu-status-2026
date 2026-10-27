@@ -25,9 +25,56 @@ export function showToast(message,type='success') {
 export function openDialog(dialog) { if (!dialog.open) dialog.showModal(); }
 export function closeDialog(dialog) { dialog.close(); }
 function saveBlob(blob,filename) { const url=URL.createObjectURL(blob),a=document.createElement('a'); a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000); }
-export async function downloadFile(path,filename) {
-  const response=await fetch(path.startsWith('/api/')?path:`/api${path}`,{credentials:'same-origin'});
-  if (!response.ok) { const body=await response.json().catch(()=>({})); throw new Error(body.error || '파일을 내려받을 수 없습니다.'); }
+const FILE_PROPAGATING_MESSAGE = '파일을 저장소에 반영 중입니다. 잠시 후 다시 시도해 주세요.';
+function checkFileAbort(signal) {
+  if (signal?.aborted) throw signal.reason || new DOMException('파일 요청이 취소되었습니다.', 'AbortError');
+}
+function fileRetryDelay(value) {
+  if (value && /^\d+$/.test(value.trim())) return Number(value) * 1000;
+  const timestamp = value ? Date.parse(value) : NaN;
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : 5000;
+}
+function waitForStoredFile(delayMs, signal) {
+  checkFileAbort(signal);
+  return new Promise((resolve, reject) => {
+    const cancel = () => {
+      clearTimeout(timer);
+      reject(signal.reason || new DOMException('파일 요청이 취소되었습니다.', 'AbortError'));
+    };
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', cancel); resolve(); }, delayMs);
+    signal?.addEventListener('abort', cancel, {once:true});
+  });
+}
+export async function fetchStoredFile(path, {signal, onRetry} = {}) {
+  const url = path.startsWith('/api/') ? path : `/api${path.startsWith('/') ? '' : '/'}${path}`;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    checkFileAbort(signal);
+    let response;
+    try { response = await fetch(url, {method:'GET', credentials:'same-origin', signal}); }
+    catch (error) {
+      checkFileAbort(signal);
+      if (error.name === 'AbortError') throw error;
+      throw new Error('서버에 연결할 수 없습니다. 연결을 확인한 뒤 다시 시도해 주세요.', {cause:error});
+    }
+    checkFileAbort(signal);
+    if (response.ok) return response;
+    let body;
+    try { body = await response.json(); }
+    catch { checkFileAbort(signal); body = {}; }
+    const propagating = response.status === 503 && body?.code === 'FILE_PROPAGATING';
+    if (propagating && attempt < 2) {
+      const delayMs = fileRetryDelay(response.headers.get('Retry-After'));
+      onRetry?.({attempt:attempt + 2, maxAttempts:3, delayMs});
+      await waitForStoredFile(delayMs, signal);
+      continue;
+    }
+    const error = new Error(propagating ? FILE_PROPAGATING_MESSAGE : body?.error || '파일을 내려받을 수 없습니다.');
+    error.status = response.status; error.code = body?.code;
+    throw error;
+  }
+}
+export async function downloadFile(path,filename,options = {}) {
+  const response=await fetchStoredFile(path,options);
   saveBlob(await response.blob(),filename || '교육수료증.zip');
 }
 export async function downloadXlsx(rows,filename='교육이수현황.xlsx') {

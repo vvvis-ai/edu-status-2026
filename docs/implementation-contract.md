@@ -37,6 +37,7 @@
 - env.ADMIN_PASSWORD, env.SESSION_SECRET은 서버 secret. env.IS_LOCAL boolean 가능. seed 초기화는 root의 local start 또는 배포 migrations에서 담당. api 모듈에서 자동시드하지 않음.
 - schema.sql은 records(collection TEXT,id TEXT,data TEXT,version INTEGER, PRIMARY KEY(collection,id)), sessions(token_hash TEXT PRIMARY KEY,role TEXT,member_id TEXT,expires_at INTEGER), login_attempts(key TEXT PRIMARY KEY,count INTEGER,reset_at INTEGER) 테이블. collections courses/members/submissions/overrides/audit/files(파일metadata+storage key) 사용. Agent가 필요 컬럼 추가 가능하나 root에게 전달.
 - 파일 저장 후 put 결과와 head의 크기가 업로드 원본과 다르면 503 `FILE_STORAGE_CHANGED`로 접수를 거부하고 이번 파일들을 정리. 저장 후 외부 보안 프로그램이 다시 변환하는 환경은 원본 저장소로 사용하기 전에 별도 검증 필요.
+- 운영 Worker는 `FILES_KV` binding을 `createKVFiles`로 감싸 env.FILES 인터페이스를 제공. `consistency:'eventual'`인 저장소는 byte-count한 put receipt만 접수 검증에 사용하며 즉시 head를 실행하지 않음. 최근 10분 이내 파일이 아직 조회되지 않으면 503 `FILE_PROPAGATING`, `Retry-After:5`를 반환. GET 미리보기·다운로드는 최대 3회 재시도하고 업로드 POST는 재시도하지 않음.
 - Root의 server/zip.mjs export createZip(entries) → ReadableStream; entries = [{name,open:async()=>ReadableStream|Uint8Array}]. backend는 모든 파일 head 미리 검사하고 스트림으로 ZIP 생성.
 
 ## root 공통 클라이언트/모델 exports

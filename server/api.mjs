@@ -336,7 +336,9 @@ async function submit(request, env) {
     for (let index=0;index<uploads.length;index++) {
       written.push(storedFiles[index].key);
       const stored = await env.FILES.put(storedFiles[index].key,uploads[index].stream(),{httpMetadata:{contentType:storedFiles[index].type}});
-      const persisted = await env.FILES.head(storedFiles[index].key);
+      // KV acknowledges durable writes before every read location sees them.
+      // Its adapter counts the stored input bytes; a read-back is not a receipt.
+      const persisted = env.FILES.consistency === 'eventual' ? stored : await env.FILES.head(storedFiles[index].key);
       if (!persisted || Number(persisted.size)!==storedFiles[index].size || (stored?.size != null && Number(stored.size)!==storedFiles[index].size)) {
         fail(503,'저장 과정에서 수료증 원본이 변경되었습니다. 저장소와 기관 보안 프로그램 설정을 담당자에게 확인해 주세요. 접수되지 않았습니다.','FILE_STORAGE_CHANGED');
       }
@@ -406,6 +408,12 @@ function safeName(value, max = 100) {
 
 function disposition(type,name) { return `${type}; filename="certificate.${name.split('.').at(-1)}"; filename*=UTF-8''${encodeURIComponent(name).replace(/['()*]/g,ch=>`%${ch.charCodeAt(0).toString(16)}`)}`; }
 
+function mayBePropagating(env,file) {
+  const age = Date.now()-Date.parse(file.createdAt);
+  return env.FILES.consistency === 'eventual' && Number.isFinite(age) && age >= -60000 && age < 10*60*1000;
+}
+function filePropagating() { fail(503,'파일을 저장소에 반영 중입니다. 잠시 후 다시 시도해 주세요.','FILE_PROPAGATING'); }
+
 async function fileResponse(request, env, fileId, url) {
   const file = await required(env,'files',fileId,'첨부파일을 찾을 수 없습니다.');
   if (!await session(request,env,'admin')) {
@@ -413,8 +421,12 @@ async function fileResponse(request, env, fileId, url) {
     if (file.memberId !== member.id) fail(403,'본인의 제출 파일만 열람할 수 있습니다.');
   }
   const object = await env.FILES.get(file.key);
+  if (!object && mayBePropagating(env,file)) filePropagating();
   if (!object) fail(404,'저장된 파일을 찾을 수 없습니다. 담당자에게 문의해 주세요.');
-  if (Number(object.size)!==file.size) fail(409,'저장된 파일의 크기가 다릅니다. 담당자에게 문의해 주세요.');
+  if (Number(object.size)!==file.size) {
+    await object.body?.cancel();
+    fail(409,'저장된 파일의 크기가 다릅니다. 담당자에게 문의해 주세요.');
+  }
   return new Response(object.body,{headers:{'Content-Type':file.type,'Content-Length':String(file.size),'Content-Disposition':disposition(url.searchParams.get('download')==='1' ? 'attachment':'inline',file.name),'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox"}});
 }
 
@@ -435,6 +447,7 @@ async function zipResponse(request, env, courseId, url) {
       const stored = fileMap.get(file.id);
       if (!stored) fail(409,`${member.name} 님의 파일 정보가 누락되었습니다. 담당자 확인이 필요합니다.`);
       const head = await env.FILES.head(stored.key);
+      if (!head && mayBePropagating(env,stored)) filePropagating();
       if (!head || Number(head.size)!==file.size) fail(409,`${member.name} 님의 수료증 파일이 누락되었거나 크기가 다릅니다. 일괄 다운로드를 중단했습니다.`);
       total += file.size;
       if (total > 2*1024*1024*1024) fail(413,'다운로드 파일 합계가 2GB를 초과했습니다. 파일을 개별 내려받아 주세요.');
@@ -443,6 +456,7 @@ async function zipResponse(request, env, courseId, url) {
       entries.push({name,open:async()=>{
         const object = await env.FILES.get(stored.key);
         if (!object) throw new Error('다운로드 중 파일이 사라졌습니다. 다시 시도해 주세요.');
+        if (Number(object.size)!==file.size) { await object.body?.cancel(); throw new Error('다운로드 중 파일 크기가 변경되었습니다. 담당자에게 문의해 주세요.'); }
         return object.body;
       }});
     }
@@ -566,7 +580,7 @@ async function route(request, env) {
 export async function handleApi(request, env) {
   try { return await route(request,env); }
   catch(error) {
-    if (error instanceof ApiError) return json({error:error.message,...(error.code ? {code:error.code} : {})},error.status);
+    if (error instanceof ApiError) return json({error:error.message,...(error.code ? {code:error.code} : {})},error.status,error.code==='FILE_PROPAGATING'?{'Retry-After':'5'}:{});
     console.error(JSON.stringify({event:'edu_api_error',method:request.method,path:new URL(request.url).pathname,message:error?.message || String(error)}));
     return json({error:'요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.'},500);
   }
