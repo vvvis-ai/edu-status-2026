@@ -21,6 +21,7 @@ let memberOrderDraft = [];
 let memberOrderVersion = 0;
 let memberOrderBusy = false;
 let memberOrderDraggingId = null;
+let memberOrderRendering = false;
 let loading = false;
 
 function setError(element, message) { element.textContent = message || ''; element.hidden = !message; }
@@ -142,10 +143,11 @@ function resetMemberOrderDraft() {
 function renderMemberOrder() {
   const members = new Map(data.members.map(member => [member.id, member]));
   $('#memberOrderCount').textContent = `재직 부서원 ${memberOrderDraft.length}명`;
-  $('#memberOrderList').innerHTML = memberOrderDraft.map((id, index) => {
+  memberOrderRendering = true;
+  try { $('#memberOrderList').innerHTML = memberOrderDraft.map((id, index) => {
     const member = members.get(id);
-    return `<li class="member-order-row" data-order-member="${e(id)}" draggable="${!memberOrderBusy}" tabindex="-1"><span class="member-order-number">${index + 1}</span><div class="member-order-name"><strong>${e(member.name)}</strong><small>${e([member.team, member.position].filter(Boolean).join(' · '))}</small></div><div class="member-order-controls"><button type="button" class="button secondary" data-order-move="up" data-order-id="${e(id)}" aria-label="${e(member.name)} 위로 이동" ${memberOrderBusy || index === 0 ? 'disabled' : ''}>↑</button><button type="button" class="button secondary" data-order-move="down" data-order-id="${e(id)}" aria-label="${e(member.name)} 아래로 이동" ${memberOrderBusy || index === memberOrderDraft.length - 1 ? 'disabled' : ''}>↓</button></div></li>`;
-  }).join('');
+    return `<li class="member-order-row" data-order-member="${e(id)}" draggable="${!memberOrderBusy}" tabindex="-1"><label class="member-order-number"><span>순서</span><input type="number" inputmode="numeric" min="1" max="${memberOrderDraft.length}" step="1" required value="${index + 1}" data-order-position="${e(id)}" aria-label="${e(member.name)} 순서 번호" ${memberOrderBusy ? 'disabled' : ''}></label><div class="member-order-name"><strong>${e(member.name)}</strong><small>${e([member.team, member.position].filter(Boolean).join(' · '))}</small></div></li>`;
+  }).join(''); } finally { memberOrderRendering = false; }
   $('#saveMemberOrderButton').disabled = memberOrderBusy || memberOrderDraft.length < 2;
   $('#reloadMemberOrderButton').disabled = memberOrderBusy;
   for (const button of $$('[data-close="memberOrderDialog"]')) button.disabled = memberOrderBusy;
@@ -156,7 +158,7 @@ function openMemberOrder() {
   setError($('#memberOrderError'), ''); $('#memberOrderAnnouncement').textContent = '';
   renderMemberOrder(); openDialog($('#memberOrderDialog'));
 }
-function moveMemberOrder(id, destination, direction) {
+function moveMemberOrder(id, destination, focusId) {
   if (memberOrderBusy) return;
   const source = memberOrderDraft.indexOf(id);
   if (source < 0 || destination < 0 || destination >= memberOrderDraft.length || source === destination) return;
@@ -164,9 +166,33 @@ function moveMemberOrder(id, destination, direction) {
   renderMemberOrder();
   const member = data.members.find(item => item.id === id);
   $('#memberOrderAnnouncement').textContent = `${member.name} 님을 ${destination + 1}번째로 옮겼습니다.`;
-  const row = $$('#memberOrderList [data-order-member]').find(item => item.dataset.orderMember === id);
-  const sameButton = direction ? $(`[data-order-move="${direction}"]`, row) : null;
-  (sameButton && !sameButton.disabled ? sameButton : row).focus();
+  if (focusId === null) return;
+  const row = $$('#memberOrderList [data-order-member]').find(item => item.dataset.orderMember === (focusId || id));
+  const input = focusId ? $('[data-order-position]', row) : null;
+  (input || row)?.focus();
+  input?.select();
+}
+function applyMemberOrderPositions(focusId = null, report = false) {
+  if (memberOrderBusy || memberOrderRendering) return false;
+  const inputs = $$('#memberOrderList [data-order-position]');
+  const invalid = inputs.find(input => !input.validity.valid || !Number.isInteger(input.valueAsNumber));
+  if (invalid) {
+    setError($('#memberOrderError'), `순서 번호는 1부터 ${memberOrderDraft.length} 사이의 정수로 입력해 주세요.`);
+    if (report) { invalid.focus(); invalid.reportValidity(); }
+    return false;
+  }
+  setError($('#memberOrderError'), '');
+  // Read pending values before moving rows, since each move replaces the inputs.
+  const changes = inputs.map(input => ({id:input.dataset.orderPosition, destination:input.valueAsNumber - 1}))
+    .filter(change => memberOrderDraft.indexOf(change.id) !== change.destination);
+  for (const change of changes) moveMemberOrder(change.id, change.destination, null);
+  // Let the browser finish focusing the clicked (now replaced) input first.
+  if (changes.length && focusId) setTimeout(() => {
+    if (!$('#memberOrderDialog').open || memberOrderBusy) return;
+    const input = $$('#memberOrderList [data-order-position]').find(item => item.dataset.orderPosition === focusId);
+    input?.focus(); input?.select();
+  }, 0);
+  return true;
 }
 async function reloadMemberOrder() {
   if (memberOrderBusy || loading) return;
@@ -179,6 +205,7 @@ async function reloadMemberOrder() {
 }
 async function saveMemberOrder(event) {
   event.preventDefault(); if (memberOrderBusy) return;
+  if (!applyMemberOrderPositions(null, true)) return;
   memberOrderBusy = true; renderMemberOrder(); setError($('#memberOrderError'), '');
   busy($('#saveMemberOrderButton'), true, '순서를 저장하고 있습니다…');
   try {
@@ -471,14 +498,20 @@ $('#editMemberOrderButton').addEventListener('click', openMemberOrder);
 $('#reloadMemberOrderButton').addEventListener('click', reloadMemberOrder);
 $('#memberOrderForm').addEventListener('submit', saveMemberOrder);
 $('#memberOrderDialog').addEventListener('cancel', event => { if (memberOrderBusy) event.preventDefault(); });
-$('#memberOrderList').addEventListener('click', event => {
-  const button = event.target.closest('[data-order-move]'); if (!button || memberOrderBusy) return;
-  const id = button.dataset.orderId, index = memberOrderDraft.indexOf(id);
-  moveMemberOrder(id, index + (button.dataset.orderMove === 'up' ? -1 : 1), button.dataset.orderMove);
+$('#memberOrderList').addEventListener('keydown', event => {
+  const input = event.target.closest('[data-order-position]');
+  if (!input || event.key !== 'Enter') return;
+  event.preventDefault(); applyMemberOrderPositions(input.dataset.orderPosition, true);
+});
+$('#memberOrderList').addEventListener('focusout', event => {
+  if (!event.target.matches('[data-order-position]') || !event.target.isConnected || memberOrderBusy || memberOrderRendering) return;
+  if (event.relatedTarget?.closest('[data-close="memberOrderDialog"], #reloadMemberOrderButton')) return;
+  applyMemberOrderPositions(event.relatedTarget?.dataset.orderPosition || null);
 });
 $('#memberOrderList').addEventListener('dragstart', event => {
   const row = event.target.closest('[data-order-member]');
-  if (memberOrderBusy || !row || !memberOrderDraft.includes(row.dataset.orderMember)) { event.preventDefault(); return; }
+  if (memberOrderBusy || event.target.closest('input, button') || !row || !memberOrderDraft.includes(row.dataset.orderMember)) { event.preventDefault(); return; }
+  if (!$('#memberOrderForm').checkValidity()) { event.preventDefault(); return; }
   memberOrderDraggingId = row.dataset.orderMember;
   event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', memberOrderDraggingId);
 });
