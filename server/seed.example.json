@@ -1,0 +1,47 @@
+{
+  "version": 2,
+  "source": "공개 가능한 가상 예시 데이터",
+  "exportedAt": "2026-10-27T00:00:00.000Z",
+  "courses": [
+    {
+      "id": "example-course-2026",
+      "name": "가상 예시 교육",
+      "site": "교육 사이트 예시",
+      "url": "https://example.com/training",
+      "deadline": "2026-12-15",
+      "submissionDeadline": "2026-12-20",
+      "year": 2026,
+      "periodType": "year",
+      "periodValue": 0,
+      "details": ["가상 과목 A", "가상 과목 B"],
+      "requirement": "one",
+      "requirementNote": "두 과목 중 한 과목을 이수하세요.",
+      "requestDepartment": "예시 부서",
+      "description": "시연용 데이터입니다.",
+      "published": true,
+      "archived": false,
+      "targetMode": "all",
+      "targetMemberIds": [],
+      "exemptMemberIds": [],
+      "createdAt": "2026-10-27T00:00:00.000Z",
+      "updatedAt": "2026-10-27T00:00:00.000Z",
+      "version": 1
+    }
+  ],
+  "members": [
+    {
+      "id": "example-member-1",
+      "name": "가상직원",
+      "position": "예시 직급",
+      "team": "예시 팀",
+      "active": true,
+      "joinedOn": "2026-01-01",
+      "leftOn": "",
+      "note": "시연용 인물",
+      "legacyCompletions": [],
+      "createdAt": "2026-10-27T00:00:00.000Z",
+      "updatedAt": "2026-10-27T00:00:00.000Z",
+      "version": 1
+    }
+  ]
+}

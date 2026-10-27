@@ -1,497 +1,108 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>2026년 교육 이수 확인</title>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        * { font-family: 'Noto Sans KR', sans-serif; }
-        .fade-in { animation: fadeIn 0.25s ease; }
-        @keyframes fadeIn { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
-        .ring-fill { fill:none; stroke-width:10; stroke-linecap:round; transform:rotate(-90deg); transform-origin:center; transition:stroke-dashoffset 0.9s cubic-bezier(0.4,0,0.2,1); }
-        .name-btn:hover { transform: translateY(-2px); }
-        .name-btn { transition: all 0.15s ease; }
-        .course-card:hover { transform: translateY(-1px); }
-        .course-card { transition: all 0.15s ease; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light">
+  <title>부서 교육 안내 · 수료증 제출</title>
+  <link rel="stylesheet" href="./edu-style.css">
+  <style>
+    .public-hero { background: linear-gradient(135deg,#312e81,#4f46e5 65%,#6366f1); color:white; padding:36px 0 42px; }
+    .public-hero h1 { font-size:clamp(1.5rem,3vw,2.1rem); letter-spacing:-.04em; margin:10px 0; }
+    .public-hero p { color:#e0e7ff; margin:0; }
+    .brand-kicker { color:#c7d2fe; font-size:.8rem; font-weight:700; letter-spacing:.06em; }
+    .hero-tools { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .public-hero .button { color:white; background:rgba(255,255,255,.1); border-color:rgba(255,255,255,.3); }
+    .public-main { padding-top:26px; padding-bottom:60px; }
+    .public-topline { display:flex; justify-content:space-between; align-items:flex-start; gap:18px; }
+    .name-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; margin-top:20px; }
+    .name-card { display:flex; flex-direction:column; align-items:flex-start; text-align:left; gap:5px; background:#fff; border:1px solid var(--border,#e2e8f0); border-radius:14px; padding:18px; color:var(--text,#1e293b); cursor:pointer; }
+    .name-card:hover { border-color:#818cf8; background:#eef2ff; }
+    .name-card strong { font-size:1.05rem; }
+    .name-card small { color:var(--muted,#64748b); font-size:.8rem; }
+    .public-search { max-width:360px; width:100%; }
+    .summary-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; margin-bottom:22px; }
+    .summary-item { padding:18px 20px; border-radius:16px; border:1px solid var(--border,#e2e8f0); background:#fff; }
+    .summary-item span { display:block; font-size:.8rem; color:var(--muted,#64748b); }
+    .summary-item strong { display:block; font-size:1.65rem; margin-top:5px; font-variant-numeric:tabular-nums; }
+    .summary-item.success strong { color:#059669; }.summary-item.warning strong { color:#d97706; }.summary-item.danger strong { color:#dc2626; }
+    .period-filters { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; }
+    .filter-caption { display:flex; align-items:center; justify-content:space-between; gap:15px; flex-wrap:wrap; margin:22px 0 12px; }
+    .course-list { display:grid; gap:16px; }
+    .course-card { padding:24px; border-radius:18px; background:#fff; border:1px solid var(--border,#e2e8f0); }
+    .course-card h3 { font-size:1.12rem; margin:10px 0 5px; }
+    .course-badges { display:flex; flex-wrap:wrap; align-items:center; gap:7px; }
+    .course-meta { display:flex; flex-wrap:wrap; gap:7px 20px; color:var(--muted,#64748b); font-size:.84rem; margin:12px 0; }
+    .course-details { background:#f8fafc; padding:15px 18px; border-radius:12px; margin:16px 0; }
+    .course-details strong { font-size:.83rem; }.course-details ul { padding-left:20px; margin:9px 0 0; line-height:1.8; }.course-details p { margin-bottom:0; }
+    .course-actions { display:flex; flex-wrap:wrap; gap:9px; margin-top:16px; }
+    .submission-receipt { margin-top:15px; border-top:1px solid #f1f5f9; padding-top:12px; font-size:.84rem; color:var(--muted,#64748b); }
+    .revision-note { padding:13px 15px; background:#fff7ed; border:1px solid #fed7aa; border-radius:10px; margin-top:14px; white-space:pre-wrap; color:#9a3412; font-size:.9rem; }
+    .description-text { white-space:pre-wrap; }
+    .drop-area { display:grid; place-items:center; text-align:center; padding:26px 20px; min-height:150px; border:2px dashed #c7d2fe; border-radius:14px; background:#f8faff; cursor:pointer; transition:background .15s,border-color .15s; }
+    .drop-area.dragging { border-color:#4f46e5; background:#e0e7ff; }.drop-area:focus-visible { outline:3px solid #a5b4fc; outline-offset:3px; }
+    .drop-area strong { display:block; margin-bottom:6px; }.drop-area p { margin:4px 0; font-size:.85rem; }
+    .upload-file-list { display:grid; gap:8px; margin-top:12px; }
+    .upload-file { display:flex; justify-content:space-between; gap:12px; align-items:center; border:1px solid var(--border,#e2e8f0); border-radius:10px; padding:10px 12px; }
+    .file-name { overflow-wrap:anywhere; font-size:.9rem; }.upload-file small { display:block; color:var(--muted,#64748b); margin-top:3px; }
+    .file-tools { display:flex; gap:5px; flex-shrink:0; }.file-tools .button { padding:6px 9px; font-size:.8rem; }
+    .dialog-heading { display:flex; justify-content:space-between; gap:14px; align-items:flex-start; margin-bottom:20px; }.dialog-heading h2 { margin:0 0 6px; font-size:1.2rem; }.dialog-heading p { margin:0; }
+    .upload-dialog { max-width:720px; width:calc(100% - 40px); }
+    .dialog-actions { display:flex; justify-content:flex-end; gap:10px; padding-top:18px; margin-top:20px; border-top:1px solid var(--border,#e2e8f0); }
+    .inline-error { background:#fef2f2; color:#991b1b; border:1px solid #fecaca; padding:12px 14px; border-radius:10px; white-space:pre-wrap; }
+    .preview-dialog { max-width:1000px; width:calc(100% - 40px); }
+    #historyDialog,#previewDialog { padding:24px; }
+    .preview-frame { display:block; width:100%; height:min(65vh,760px); border:1px solid var(--border,#e2e8f0); border-radius:10px; background:#f1f5f9; }img.preview-frame { object-fit:contain; }
+    .history-entry { padding:18px 0; border-top:1px solid var(--border,#e2e8f0); }.history-entry:first-child { border-top:0; padding-top:0; }.history-entry p { margin:8px 0; }.history-files { display:flex; gap:7px; flex-wrap:wrap; margin-top:10px; }
+    .public-footer { margin-top:28px; color:var(--muted,#64748b); font-size:.8rem; display:flex; justify-content:space-between; gap:15px; flex-wrap:wrap; }
+    [hidden] { display:none !important; }
+    @media(max-width:760px) { .public-topline { flex-direction:column; }.summary-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }.summary-item { padding:13px; }.period-filters { grid-template-columns:repeat(2,minmax(0,1fr)); }.course-card { padding:18px; } }
+    @media(max-width:420px) { .summary-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }.upload-file { align-items:flex-start; flex-direction:column; } }
+  </style>
+  <script type="module" src="./edu-public.mjs"></script>
 </head>
-<body class="min-h-screen bg-slate-100">
-
-<!-- ============ 이름 선택 화면 ============ -->
-<div id="selectScreen">
-    <div style="background: linear-gradient(150deg, #312e81 0%, #4f46e5 60%, #6366f1 100%);" class="px-4 pt-14 pb-20 text-center text-white relative overflow-hidden">
-        <div class="absolute inset-0 opacity-10" style="background-image: radial-gradient(circle at 20% 80%, white 1px, transparent 1px), radial-gradient(circle at 80% 20%, white 1px, transparent 1px); background-size: 40px 40px;"></div>
-        <div class="relative z-10">
-            <div class="text-5xl mb-4">📋</div>
-            <h1 class="text-2xl font-bold mb-2 tracking-tight">2026년 사이버 교육 이수 현황</h1>
-            <p class="text-indigo-200 text-sm">이름을 선택하면 나의 교육 현황을 확인할 수 있습니다</p>
-            <div class="mt-6 max-w-xs mx-auto">
-                <input type="text" id="nameSearch" placeholder="🔍  이름으로 검색..."
-                    class="w-full px-5 py-3 rounded-full text-slate-800 text-sm outline-none shadow-lg focus:ring-2 focus:ring-white/50 placeholder-slate-400"
-                    oninput="filterNames(this.value)" />
-            </div>
-        </div>
+<body>
+  <header class="public-hero">
+    <div class="container public-topline">
+      <div><div class="brand-kicker">부서 교육 관리</div><h1 id="pageTitle">교육 안내 · 수료증 제출</h1><p id="pageSubtitle">나에게 필요한 교육을 확인하고 수료증을 제출하세요.</p></div>
+      <div class="hero-tools"><button type="button" id="refreshButton" class="button">새로고침</button><button type="button" id="changeMemberButton" class="button" hidden>이름 다시 선택</button></div>
     </div>
-    <div class="max-w-3xl mx-auto px-4 -mt-6 pb-12 pt-4">
-        <div class="bg-white rounded-2xl shadow-lg border border-slate-100 p-6">
-            <div class="flex items-center justify-between mb-5">
-                <div>
-                    <h2 class="text-base font-bold text-slate-800">이름을 선택하세요</h2>
-                    <p class="text-xs text-slate-400 mt-0.5">선택 후 나의 미이수 교육을 바로 확인할 수 있습니다</p>
-                </div>
-                <span class="text-xs font-semibold px-3 py-1 rounded-full bg-indigo-50 text-indigo-600">총 30명</span>
-            </div>
-            <div id="nameGrid" class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2.5"></div>
-            <div id="noResult" class="hidden text-center py-10 text-slate-400 text-sm">검색 결과가 없습니다.</div>
+  </header>
+  <main class="container public-main">
+    <div id="loadingState" class="panel empty-state" role="status">교육 정보를 불러오고 있습니다.</div>
+    <div id="errorState" class="panel" role="alert" hidden><h2 class="section-title">정보를 불러오지 못했습니다</h2><p id="pageError" class="muted"></p><button type="button" id="retryButton" class="button primary">다시 불러오기</button></div>
+    <section id="memberSelection" class="panel" aria-labelledby="selectionTitle" hidden>
+      <div class="public-topline"><div><h2 id="selectionTitle" class="section-title">본인 이름을 선택하세요</h2><p class="muted">이름을 선택하면 교육 안내와 나의 제출 현황을 볼 수 있습니다.</p><span id="memberCount" class="badge info"></span></div><div class="field public-search"><label for="memberSearch">이름·팀·직급 검색</label><input id="memberSearch" type="search" autocomplete="off" placeholder="이름 또는 소속을 입력하세요"></div></div>
+      <div id="memberGrid" class="name-grid"></div><p id="memberEmpty" class="empty-state" hidden>검색 결과가 없습니다.</p>
+    </section>
+    <section id="personalDashboard" aria-label="나의 교육 현황" hidden>
+      <div id="summaryGrid" class="summary-grid" aria-label="선택 기간 교육 요약"></div>
+      <section class="panel" aria-labelledby="filterTitle"><h2 id="filterTitle" class="section-title">교육 찾아보기</h2><div class="period-filters">
+        <div class="field"><label for="yearFilter">연도</label><select id="yearFilter"></select></div>
+        <div class="field"><label for="quarterFilter">분기</label><select id="quarterFilter"><option value="">전체 분기</option><option value="1">1분기</option><option value="2">2분기</option><option value="3">3분기</option><option value="4">4분기</option></select></div>
+        <div class="field"><label for="monthFilter">월</label><select id="monthFilter"><option value="">전체 월</option></select></div>
+        <div class="field"><label for="statusFilter">처리 상태</label><select id="statusFilter"><option value="">전체 상태</option><option value="not_submitted">미제출</option><option value="pending">확인 중</option><option value="needs_revision">보완 요청</option><option value="approved">이수 완료</option><option value="exempt">면제</option></select></div>
+      </div></section>
+      <div class="filter-caption"><h2 id="courseListTitle" class="section-title">나의 교육</h2><span id="courseCount" class="muted"></span></div>
+      <div id="completionNotice" class="notice" hidden></div><div id="courseList" class="course-list" aria-labelledby="courseListTitle"></div><div id="courseEmpty" class="panel empty-state" hidden>선택한 조건에 해당하는 교육이 없습니다.</div>
+    </section>
+    <footer class="public-footer"><span>교육 이수는 담당자의 확인 후 반영됩니다.</span><span id="lastUpdated"></span></footer>
+  </main>
+  <dialog id="uploadDialog" class="dialog upload-dialog" aria-labelledby="uploadTitle">
+    <form id="uploadForm"><div class="dialog-heading"><div><h2 id="uploadTitle">수료증 제출</h2><p id="uploadCourseName" class="muted"></p></div><button type="button" class="button ghost" id="closeUpload" aria-label="제출 창 닫기">닫기</button></div>
+      <div class="stack"><div id="resubmitNotice" class="notice" hidden></div>
+        <div class="field"><label for="completedOn">수료일 <span aria-hidden="true">*</span></label><input id="completedOn" name="completedOn" type="date" required><small class="muted">수료증에 기재된 날짜를 입력해 주세요.</small></div>
+        <div><div id="dropArea" class="drop-area" role="button" tabindex="0" aria-label="수료증 파일 선택 또는 끌어다 놓기" aria-describedby="uploadLimits drmNotice"><div><strong>파일을 여기에 끌어다 놓으세요</strong><p>또는 클릭하여 PDF·사진 파일 선택</p><p id="uploadLimits" class="muted">PDF · JPG · PNG · WebP / 파일당 15MB · 최대 10개 · 합계 60MB</p></div></div>
+          <input id="certificateFiles" type="file" accept="application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp" multiple hidden>
+          <p id="drmNotice" class="notice">DRM이 적용된 파일은 기관에서 허용하는 절차로 보안 해제 후 업로드해 주세요.</p><div id="uploadFileList" class="upload-file-list" aria-live="polite"></div><p id="uploadTotal" class="muted"></p>
         </div>
-    </div>
-</div>
-
-<!-- ============ 개인 대시보드 ============ -->
-<div id="personalDashboard" class="hidden fade-in pb-16">
-    <!-- 헤더 -->
-    <div style="background: linear-gradient(150deg, #312e81 0%, #4f46e5 60%, #6366f1 100%);" class="px-4 pb-16 pt-8 text-white relative overflow-hidden">
-        <div class="absolute inset-0 opacity-10" style="background-image: radial-gradient(circle at 20% 80%, white 1px, transparent 1px); background-size: 40px 40px;"></div>
-        <div class="max-w-2xl mx-auto relative z-10">
-            <button onclick="goBack()" class="flex items-center gap-1.5 text-indigo-200 hover:text-white text-sm mb-8 transition-colors">
-                ← 목록으로
-            </button>
-            <div class="flex items-center justify-between gap-4">
-                <div>
-                    <p class="text-indigo-200 text-sm mb-1" id="greetPosition"></p>
-                    <h2 class="text-3xl font-bold tracking-tight" id="greetName"></h2>
-                    <p class="text-indigo-200 text-sm mt-1">님의 2026년 교육 현황</p>
-                </div>
-                <div class="relative shrink-0">
-                    <svg viewBox="0 0 100 100" class="w-24 h-24 drop-shadow-lg">
-                        <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="10"/>
-                        <circle id="progressRing" cx="50" cy="50" r="42" class="ring-fill" stroke="#a5b4fc" stroke-dasharray="263.9" stroke-dashoffset="263.9"/>
-                    </svg>
-                    <div class="absolute inset-0 flex flex-col items-center justify-center">
-                        <span class="text-xl font-bold" id="progressPct">0%</span>
-                        <span class="text-[9px] text-indigo-200 font-medium">이수율</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- 통계 카드 -->
-    <div class="max-w-2xl mx-auto px-4 -mt-6 mb-6">
-        <div class="bg-white rounded-2xl shadow-lg border border-slate-100 p-5 grid grid-cols-3 divide-x divide-slate-100">
-            <div class="text-center pr-4">
-                <p class="text-2xl font-bold text-emerald-500" id="doneCount">0</p>
-                <p class="text-xs text-slate-400 mt-1 font-medium">이수 완료</p>
-            </div>
-            <div class="text-center px-4">
-                <p class="text-2xl font-bold text-red-500" id="todoCount">0</p>
-                <p class="text-xs text-slate-400 mt-1 font-medium">미이수</p>
-            </div>
-            <div class="text-center pl-4">
-                <p class="text-2xl font-bold text-slate-400" id="totalCount">0</p>
-                <p class="text-xs text-slate-400 mt-1 font-medium">전체</p>
-            </div>
-        </div>
-    </div>
-
-    <!-- 미이수 교육 -->
-    <div class="max-w-2xl mx-auto px-4 mb-6">
-        <div class="flex items-center gap-2 mb-3">
-            <span class="w-2 h-2 rounded-full bg-red-500 inline-block"></span>
-            <h3 class="text-sm font-bold text-slate-700">이수해야 할 교육</h3>
-        </div>
-        <div id="allDone" class="hidden bg-emerald-50 border border-emerald-200 rounded-2xl p-8 text-center">
-            <div class="text-4xl mb-3">🎉</div>
-            <p class="font-bold text-emerald-800 text-lg">모든 교육을 이수했습니다!</p>
-            <p class="text-sm text-emerald-600 mt-1">2026년 의무 교육을 모두 완료하셨습니다. 수고하셨습니다.</p>
-        </div>
-        <div id="todoCards" class="space-y-3"></div>
-    </div>
-
-    <!-- 완료 교육 -->
-    <div class="max-w-2xl mx-auto px-4 mb-4" id="doneSection">
-        <button onclick="toggleDone()" class="flex items-center gap-2 text-sm font-semibold text-slate-400 hover:text-slate-600 transition-colors mb-3 w-full">
-            <span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span>
-            완료한 교육
-            <span id="doneToggleLabel" class="text-xs font-normal ml-1">↓ 펼치기</span>
-        </button>
-        <div id="doneCards" class="space-y-2 hidden"></div>
-    </div>
-
-    <!-- 전체 부서 현황 -->
-    <div class="max-w-2xl mx-auto px-4">
-        <button onclick="toggleDept()" class="w-full flex items-center justify-between text-sm font-semibold text-slate-400 hover:text-slate-600 transition-colors py-3 border-t border-slate-200">
-            <span>전체 부서 현황</span>
-            <span id="deptToggleLabel" class="text-xs font-normal">펼치기 ↓</span>
-        </button>
-        <div id="deptSection" class="hidden mt-3 bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-            <div class="space-y-1.5" id="deptList"></div>
-        </div>
-    </div>
-</div>
-
-<script>
-    const API_ENDPOINT = 'https://my-dashboard-api.antae98.workers.dev';
-
-    const courses = [
-        { 
-            id: 1,  
-            name: '공직자 안보교육',       
-            site: '부산광역시 인재개발원',          
-            url: 'https://busan.nhi.go.kr',         
-            deadline: '2026-06-19', 
-            mandatory: true,
-            detail: ['2026년 공직자 안보교육']
-        },
-        { 
-            id: 2,  
-            name: '직장 내 괴롭힘 예방',   
-            site: '동구청 사이버연수원',             
-            url: 'https://bsdonggu.ubob.com',       
-            deadline: '2026-06-30', 
-            mandatory: true,
-            detail: [
-                '프리한 법정교육! 박선영X배성재의 직장 내 괴롭힘 금지',
-                '직장 내 괴롭힘 금지법의 이해[2026-1기]'
-            ]
-        },
-        { 
-            id: 3,  
-            name: '장애인식개선교육',       
-            site: '국가공무원인재개발원',            
-            url: 'https://busan.nhi.go.kr',         
-            deadline: '2026-09-04', 
-            mandatory: true,
-            detail: ['고용노동부와 보건복지부가 함께하는 장애인식개선교육']
-        },
-        { 
-            id: 4,  
-            name: '4대 폭력예방 교육',     
-            site: '부산광역시 인재개발원',           
-            url: 'https://busan.nhi.go.kr',         
-            deadline: '2026-09-30', 
-            mandatory: true,
-            detail: [
-                '평등한 일상, 폭력예방교육',
-                '평등한 일상, 폭력예방교육(고위직해당)'
-            ]
-        },
-        { 
-            id: 5,  
-            name: '성인지 교육',            
-            site: '한국양성평등교육진흥원',          
-            url: 'https://eqgender.kigepe.or.kr',   
-            deadline: '2026-09-30', 
-            mandatory: true,
-            detail: [
-                '1) 양성평등과 성인지 감수성 이해',
-                '2) 성인지 정책과 성주류화',
-                '3) 사례로 알아보는 사업성별영향평가',
-                '4) 양성평등한 조직문화 만들기',
-                '5) 여성친화도시 이해 프로젝트',
-                '6) 양성평등 정책의 이해',
-                '7) 변화를 읽다, 성인지 예산',
-                '8) 변화를 읽다, 성인지 통계',
-                '9) 아카이브로 보는 양성평등 정책'
-            ]
-        },
-        { 
-            id: 6,  
-            name: '감염병 교육',            
-            site: '부산광역시 인재개발원',           
-            url: 'https://busan.nhi.go.kr',         
-            deadline: '2026-12-03', 
-            mandatory: true,
-            detail: ['감염병교육']
-        },
-        { 
-            id: 7,  
-            name: '긴급복지 신고의무',      
-            site: 'KOHI 의무교육 플랫폼',           
-            url: 'https://in.kohi.or.kr',           
-            deadline: '2026-12-11', 
-            mandatory: true,
-            detail: ['긴급복지지원 신고의무 교육(2026)']
-        },
-        { 
-            id: 8,  
-            name: '개인정보 보호',          
-            site: '동구청 사이버연수원',                  
-            url: 'https://bsdonggu.ubob.com/',       
-            deadline: '2026-10-09',
-            mandatory: true,
-            detail: ['프리한 법정교육! 박선영X배성재의 개인정보 보호']
-        },
-        { 
-            id: 9,  
-            name: '아동학대 예방 신고의무', 
-            site: '부산광역시 인재개발원 나라배움터',
-            url: 'https://busan.nhi.go.kr',         
-            deadline: '2026-10-31', 
-            mandatory: true,
-            detail: ['아동학대 신고의무자 및 공공부문 아동학대 예방교육']
-        },
-        { 
-            id: 10, 
-            name: '통일교육',               
-            site: '동구공무원사이버연수원',           
-            url: 'https://bsdonggu.ubob.com',       
-            deadline: '2026-12-31', 
-            mandatory: true,
-            detail: ['2026년 공공부문 통일교육']
-        },
-        {
-            id: 11,
-            name: '2026년 적극행정 사이버교육',
-            site: '부산광역시 인재개발원 나라배움터',
-            url: 'https://busan.nhi.go.kr',
-            deadline: '2026-09-29',
-            mandatory: true,
-            detail: [
-                '적극행정을 통한 공공 혁신 (1시간 30분)',
-                '국민의 생활을 바꾸는 적극행정 (50분)',
-                '위 과정 중 1개 필수 이수'
-            ]
-        },
-    ].sort((a, b) => a.deadline.localeCompare(b.deadline) || a.id - b.id);
-
-    const initialMembers = [
-        { id: 1,  name: '허미영', position: '행정5급',        completions: [1, 2] },
-        { id: 2,  name: '장해성', position: '행정6급',        completions: [1, 2, 3] },
-        { id: 3,  name: '이정종', position: '행정6급',        completions: [1] },
-        { id: 4,  name: '김효주', position: '행정6급',        completions: [1, 3] },
-        { id: 5,  name: '유행연', position: '행정6급',        completions: [] },
-        { id: 6,  name: '신봉일', position: '행정6급',        completions: [] },
-        { id: 7,  name: '이효민', position: '행정8급',        completions: [] },
-        { id: 8,  name: '전영옥', position: '행정8급',        completions: [] },
-        { id: 9,  name: '안태욱', position: '행정9급',        completions: [] },
-        { id: 10, name: '강소희', position: '시간선택제라급', completions: [] },
-        { id: 11, name: '박경덕', position: '행정7급',        completions: [] },
-        { id: 12, name: '심유나', position: '행정8급',        completions: [] },
-        { id: 13, name: '문수연', position: '행정8급',        completions: [] },
-        { id: 14, name: '성지혜', position: '시간선택제라급', completions: [] },
-        { id: 15, name: '최유정', position: '시간선택제마급', completions: [] },
-        { id: 16, name: '김인혜', position: '행정7급',        completions: [] },
-        { id: 17, name: '문은진', position: '사서8급',        completions: [] },
-        { id: 31, name: '이슬비', position: '사서7급',        completions: [] },
-        { id: 19, name: '김지연', position: '사서8급',        completions: [] },
-        { id: 21, name: '안형진', position: '전산9급',        completions: [] },
-        { id: 22, name: '한지성', position: '시간선택제마급', completions: [] },
-        { id: 23, name: '이설희', position: '공무직',         completions: [] },
-        { id: 24, name: '이민정', position: '사서7급',        completions: [] },
-        { id: 25, name: '이창영', position: '기계운영6급',    completions: [] },
-        { id: 26, name: '송준영', position: '사서8급',        completions: [] },
-        { id: 27, name: '노금혜', position: '사서9급',        completions: [] },
-        { id: 28, name: '김상득', position: '청원경찰',       completions: [] },
-        { id: 29, name: '조영준', position: '청원경찰',       completions: [] },
-    ];
-
-    let members = JSON.parse(JSON.stringify(initialMembers));
-    let currentMember = null;
-    let doneOpen = false;
-    let deptOpen = false;
-
-    function getDday(deadline) {
-        const today = new Date(); today.setHours(0,0,0,0);
-        const end = new Date(deadline);
-        return Math.ceil((end - today) / (1000*60*60*24));
-    }
-
-    function getDdayBadge(d) {
-        if (d < 0)  return `<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-500">마감</span>`;
-        if (d === 0) return `<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-600 text-white">D-Day</span>`;
-        if (d <= 30) return `<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700">D-${d}</span>`;
-        if (d <= 90) return `<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">D-${d}</span>`;
-        return `<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">D-${d}</span>`;
-    }
-
-    async function loadData() {
-        try {
-            const res = await fetch(API_ENDPOINT);
-            if (res.ok) {
-                const data = await res.json();
-                if (data?.members?.length) members = data.members;
-            }
-        } catch(e) {}
-        renderNameGrid(members);
-    }
-
-    function renderNameGrid(list) {
-        const grid = document.getElementById('nameGrid');
-        const noResult = document.getElementById('noResult');
-        if (!list.length) {
-            grid.innerHTML = '';
-            noResult.classList.remove('hidden');
-            return;
-        }
-        noResult.classList.add('hidden');
-        grid.innerHTML = list.map(m => {
-            const pct = Math.round(m.completions.length / courses.length * 100);
-            const isAll = m.completions.length === courses.length;
-            return `
-            <button onclick="selectMember(${m.id})"
-                class="name-btn bg-white border border-slate-200 rounded-xl p-3 text-center hover:border-indigo-400 hover:shadow-md group">
-                <p class="text-[9px] text-slate-400 group-hover:text-indigo-400 transition-colors truncate">${m.position}</p>
-                <p class="text-sm font-bold text-slate-800 mt-0.5">${m.name}</p>
-                <div class="mt-2 flex items-center justify-center gap-1">
-                    <div class="w-8 h-1 rounded-full bg-slate-100 overflow-hidden">
-                        <div class="h-full ${isAll ? 'bg-emerald-400' : 'bg-indigo-400'}" style="width:${pct}%"></div>
-                    </div>
-                    <span class="text-[10px] ${isAll ? 'text-emerald-500' : 'text-slate-400'} font-semibold">${m.completions.length}/${courses.length}</span>
-                </div>
-            </button>`;
-        }).join('');
-    }
-
-    function filterNames(val) {
-        const filtered = members.filter(m => m.name.includes(val) || m.position.includes(val));
-        renderNameGrid(filtered);
-    }
-
-    function selectMember(id) {
-        currentMember = members.find(m => m.id === id);
-        if (!currentMember) return;
-        document.getElementById('selectScreen').classList.add('hidden');
-        const dash = document.getElementById('personalDashboard');
-        dash.classList.remove('hidden');
-        dash.classList.add('fade-in');
-        window.scrollTo(0, 0);
-        renderPersonal();
-    }
-
-    function goBack() {
-        document.getElementById('personalDashboard').classList.add('hidden');
-        document.getElementById('selectScreen').classList.remove('hidden');
-        document.getElementById('nameSearch').value = '';
-        renderNameGrid(members);
-        doneOpen = false;
-        deptOpen = false;
-        window.scrollTo(0, 0);
-    }
-
-    function renderPersonal() {
-        const m = currentMember;
-        const done = courses.filter(c => m.completions.includes(c.id));
-        const todo = courses.filter(c => !m.completions.includes(c.id));
-        const pct = Math.round(done.length / courses.length * 100);
-
-        document.getElementById('greetPosition').textContent = m.position;
-        document.getElementById('greetName').textContent = m.name;
-        document.getElementById('progressPct').textContent = `${pct}%`;
-        document.getElementById('doneCount').textContent = done.length;
-        document.getElementById('todoCount').textContent = todo.length;
-        document.getElementById('totalCount').textContent = courses.length;
-
-        const circumference = 263.9;
-        const offset = circumference * (1 - pct / 100);
-        setTimeout(() => {
-            document.getElementById('progressRing').style.strokeDashoffset = offset;
-        }, 50);
-
-        const todoContainer = document.getElementById('todoCards');
-        const allDone = document.getElementById('allDone');
-        if (todo.length === 0) {
-            todoContainer.innerHTML = '';
-            allDone.classList.remove('hidden');
-        } else {
-            allDone.classList.add('hidden');
-            todoContainer.innerHTML = todo.map(c => {
-                const d = getDday(c.deadline);
-                const urgent = d >= 0 && d <= 30;
-                
-                const detailHtml = c.detail.map(item => `
-                    <div class="flex items-start gap-1 text-slate-600 mt-0.5">
-                        <span class="text-indigo-400 shrink-0 select-none">•</span>
-                        <span class="break-all font-medium">${item}</span>
-                    </div>
-                `).join('');
-
-                return `
-                <a href="${c.url}" target="_blank" rel="noopener noreferrer"
-                    class="course-card block bg-white border ${urgent ? 'border-red-200 bg-red-50/30' : 'border-slate-200'} rounded-2xl p-4 hover:shadow-md hover:border-indigo-300 group">
-                    <div class="flex items-start justify-between gap-3">
-                        <div class="flex-1 min-w-0">
-                            <p class="font-bold text-base text-slate-800 group-hover:text-indigo-700 transition-colors">${c.name}</p>
-                            <p class="text-xs text-slate-400 mt-0.5">기관/사이트: ${c.site} | 마감 ${c.deadline}</p>
-                            
-                            <div class="mt-2.5 pt-2 border-t border-dashed border-slate-100 text-xs">
-                                <p class="text-[11px] font-bold text-indigo-500 mb-1">📝 실제 수강 과정명</p>
-                                ${detailHtml}
-                            </div>
-                        </div>
-                        <div class="flex flex-col items-end gap-2 shrink-0">
-                            ${getDdayBadge(d)}
-                            <span class="text-[11px] text-indigo-500 font-semibold group-hover:underline whitespace-nowrap">교육 바로가기 →</span>
-                        </div>
-                    </div>
-                </a>`;
-            }).join('');
-        }
-
-        const doneCards = document.getElementById('doneCards');
-        doneCards.innerHTML = done.length ? done.map(c => {
-            const detailHtml = c.detail.map(item => `
-                <div class="flex items-start gap-1 text-emerald-700 text-[11px] mt-0.5">
-                    <span class="shrink-0 select-none">•</span>
-                    <span class="break-all">${item}</span>
-                </div>
-            `).join('');
-
-            return `
-            <div class="bg-emerald-50 border border-emerald-100 rounded-xl p-3 flex items-start justify-between gap-3">
-                <div class="flex-1 min-w-0">
-                    <p class="text-sm font-semibold text-emerald-800">${c.name}</p>
-                    <p class="text-xs text-emerald-600 mt-0.5">${c.site}</p>
-                    <div class="mt-1.5 pt-1.5 border-t border-emerald-200/40">
-                        ${detailHtml}
-                    </div>
-                </div>
-                <span class="text-emerald-500 font-bold text-base shrink-0">✓</span>
-            </div>`
-        }).join('')
-        : '<p class="text-sm text-slate-400 text-center py-4">완료한 교육이 없습니다.</p>';
-
-        doneCards.classList.add('hidden');
-        doneOpen = false;
-        document.getElementById('doneToggleLabel').textContent = '↓ 펼치기';
-
-        document.getElementById('deptSection').classList.add('hidden');
-        deptOpen = false;
-        document.getElementById('deptToggleLabel').textContent = '펼치기 ↓';
-
-        document.getElementById('deptList').innerHTML = members.map(mem => {
-            const p = Math.round(mem.completions.length / courses.length * 100);
-            const isAll = mem.completions.length === courses.length;
-            const isMe = mem.id === m.id;
-            const bar = isAll ? 'bg-emerald-400' : p > 50 ? 'bg-indigo-400' : 'bg-amber-400';
-            return `
-            <div class="flex items-center gap-3 rounded-lg px-2 py-1.5 ${isMe ? 'bg-indigo-50' : ''}">
-                <span class="text-xs w-28 shrink-0 truncate ${isMe ? 'font-bold text-indigo-800' : 'text-slate-600'}">
-                    ${mem.position} ${mem.name}${isMe ? ' ◀' : ''}
-                </span>
-                <div class="flex-1 bg-slate-100 rounded-full h-1.5 overflow-hidden">
-                    <div class="h-full ${bar} rounded-full transition-all" style="width:${p}%"></div>
-                </div>
-                <span class="text-xs font-bold w-8 text-right ${isMe ? 'text-indigo-700' : isAll ? 'text-emerald-600' : 'text-slate-500'}">${p}%</span>
-            </div>`;
-        }).join('');
-    }
-
-    function toggleDone() {
-        doneOpen = !doneOpen;
-        document.getElementById('doneCards').classList.toggle('hidden', !doneOpen);
-        document.getElementById('doneToggleLabel').textContent = doneOpen ? '↑ 접기' : '↓ 펼치기';
-    }
-
-    function toggleDept() {
-        deptOpen = !deptOpen;
-        document.getElementById('deptSection').classList.toggle('hidden', !deptOpen);
-        document.getElementById('deptToggleLabel').textContent = deptOpen ? '접기 ↑' : '펼치기 ↓';
-    }
-
-    loadData();
-</script>
+        <div class="field"><label for="submissionComment">담당자에게 전달할 내용 <span class="muted">(선택)</span></label><textarea id="submissionComment" name="comment" rows="2" maxlength="2000" placeholder="수료증 확인에 필요한 내용이 있으면 남겨주세요."></textarea></div>
+        <p id="uploadError" class="inline-error" role="alert" hidden></p><p id="uploadProgress" class="notice" role="status" hidden>파일을 저장하고 있습니다. 완료될 때까지 창을 닫지 마세요.</p>
+      </div>
+      <div class="dialog-actions"><button type="button" id="cancelUpload" class="button secondary">취소</button><button type="submit" id="submitCertificate" class="button primary">수료증 제출</button></div>
+    </form>
+  </dialog>
+  <dialog id="historyDialog" class="dialog upload-dialog" aria-labelledby="historyTitle"><div class="dialog-heading"><div><h2 id="historyTitle">제출·검토 이력</h2><p id="historyCourseName" class="muted"></p></div><button type="button" id="closeHistory" class="button ghost">닫기</button></div><div id="historyContent"></div></dialog>
+  <dialog id="previewDialog" class="dialog preview-dialog" aria-labelledby="previewTitle"><div class="dialog-heading"><div><h2 id="previewTitle">수료증 미리보기</h2><p id="previewFileName" class="muted"></p></div><button type="button" id="closePreview" class="button ghost">닫기</button></div><div id="previewContent"></div><p class="muted">내용이 보이지 않으면 파일의 DRM 해제 여부와 파일 형식을 확인해 주세요.</p></dialog>
 </body>
 </html>

@@ -1,0 +1,950 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>교육수료증 정보 자동 추출 & 엑셀 취합기</title>
+  <!-- Pretendard 폰트 -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/pretendard/1.3.9/static/pretendard.min.css" rel="stylesheet">
+  <!-- SheetJS (XLSX 내보내기용) -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <!-- Tesseract.js (v5 고정밀 OCR) -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <!-- Local PDF.js engine; classic scripts also work when this HTML is double-clicked. -->
+  <script src="vendor/pdf.worker.min.js"></script>
+  <script src="vendor/pdf.min.js"></script>
+  <script src="certificate-parser.js"></script>
+  <script src="certificate-ocr.js"></script>
+  <style>
+    :root {
+      --primary: #2563EB;
+      --primary-hover: #1D4ED8;
+      --primary-light: #EFF6FF;
+      --bg: #F8FAFC;
+      --surface: #FFFFFF;
+      --border: #CBD5E1;
+      --text: #0F172A;
+      --text-muted: #64748B;
+      --success: #10B981;
+      --success-light: #ECFDF5;
+      --warning: #F59E0B;
+      --warning-light: #FFFBEB;
+      --danger: #EF4444;
+      --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+      --radius: 12px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 30px 20px 60px;
+    }
+    .container {
+      max-width: 1280px;
+      margin: 0 auto;
+    }
+    /* Header */
+    .header {
+      margin-bottom: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+    .header h1 {
+      font-size: 24px;
+      font-weight: 800;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .header p {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    /* Quick settings */
+    .settings-bar {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      margin-bottom: 20px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20px;
+      align-items: center;
+      box-shadow: var(--shadow);
+    }
+    .setting-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+    .setting-item input, .setting-item select {
+      padding: 6px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 13px;
+      outline: none;
+      transition: border 0.2s;
+    }
+    .setting-item input:focus, .setting-item select:focus {
+      border-color: var(--primary);
+    }
+    /* Dropzone */
+    .dropzone {
+      background: var(--surface);
+      border: 2px dashed #93C5FD;
+      border-radius: var(--radius);
+      padding: 44px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-bottom: 24px;
+      box-shadow: var(--shadow);
+    }
+    .dropzone:hover, .dropzone.dragover {
+      background: var(--primary-light);
+      border-color: var(--primary);
+      transform: translateY(-2px);
+    }
+    .dropzone-icon {
+      font-size: 46px;
+      margin-bottom: 12px;
+    }
+    .dropzone-title {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--primary);
+      margin-bottom: 6px;
+    }
+    .dropzone-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    .file-buttons {
+      margin-top: 16px;
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+    }
+    .btn {
+      padding: 8px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+    .btn:hover {
+      background: #F1F5F9;
+    }
+    .btn-primary {
+      background: var(--primary);
+      color: #fff;
+      border-color: var(--primary);
+    }
+    .btn-primary:hover {
+      background: var(--primary-hover);
+    }
+    .btn-success {
+      background: var(--success);
+      color: #fff;
+      border-color: var(--success);
+    }
+    .btn-success:hover {
+      background: #059669;
+    }
+    .btn-danger {
+      color: var(--danger);
+      border-color: #FECACA;
+    }
+    .btn-danger:hover {
+      background: #FEF2F2;
+    }
+    /* Stats & Toolbar */
+    .toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .stats {
+      display: flex;
+      gap: 12px;
+      font-size: 13px;
+    }
+    .stat-badge {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 6px 12px;
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .stat-badge b {
+      color: var(--primary);
+    }
+    /* Table card */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      margin-bottom: 24px;
+    }
+    .table-responsive {
+      width: 100%;
+      overflow-x: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      text-align: left;
+    }
+    thead {
+      background: #F1F5F9;
+      border-bottom: 1px solid var(--border);
+    }
+    th {
+      padding: 12px 14px;
+      font-weight: 700;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    td {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    tbody tr:hover {
+      background: #F8FAFC;
+    }
+    .editable-cell {
+      cursor: text;
+      padding: 4px 6px;
+      border-radius: 4px;
+      border: 1px solid transparent;
+      min-width: 60px;
+      display: inline-block;
+      width: 100%;
+    }
+    .editable-cell:hover {
+      background: #F1F5F9;
+      border-color: #CBD5E1;
+    }
+    .editable-cell:focus {
+      background: #fff;
+      border-color: var(--primary);
+      outline: none;
+      box-shadow: 0 0 0 2px rgb(37 99 235 / 0.15);
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .badge-success { background: var(--success-light); color: var(--success); }
+    .badge-warning { background: var(--warning-light); color: var(--warning); }
+    .badge-info { background: #E0F2FE; color: #0369A1; }
+    .badge-danger { background: #FEF2F2; color: var(--danger); }
+    .row-btn {
+      padding: 4px 8px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: #fff;
+      font-size: 11px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .row-btn:hover {
+      background: #F1F5F9;
+    }
+    /* Modal */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.45);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 50;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+    }
+    .modal-backdrop.show {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .modal {
+      background: #fff;
+      border-radius: var(--radius);
+      width: 90%;
+      max-width: 700px;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1);
+    }
+    .modal-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .modal-header h3 { font-size: 16px; font-weight: 700; }
+    .modal-close {
+      background: none; border: none; font-size: 18px; cursor: pointer; color: var(--text-muted);
+    }
+    .modal-body {
+      padding: 20px;
+      overflow-y: auto;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .modal-body pre {
+      background: #F8FAFC;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      font-family: monospace;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #1E293B;
+      color: #fff;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.2s;
+      z-index: 100;
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <!-- Header -->
+  <div class="header">
+    <div>
+      <h1>📑 교육수료증 정보 자동 추출 & 엑셀 취합 도구</h1>
+      <p>수료증 PDF 및 사진 파일(PNG, JPG)을 넣으면 6대 핵심 정보를 자동 분석하여 정돈된 엑셀(.xlsx)로 저장합니다.</p>
+    </div>
+    <div style="display:flex; gap:10px;">
+      <button class="btn btn-success" onclick="exportToExcel()">
+        📥 엑셀(.xlsx) 다운로드
+      </button>
+      <button class="btn btn-primary" onclick="copyTableToClipboard()">
+        📋 표 전체 복사 (엑셀 붙여넣기용)
+      </button>
+    </div>
+  </div>
+
+  <!-- Settings Bar -->
+  <div class="settings-bar">
+    <div class="setting-item">
+      <span>🏢 기본 부서명:</span>
+      <input type="text" id="defaultDeptInput" value="평생교육과" placeholder="예: 평생교육과">
+      <button class="btn" style="padding:4px 10px; font-size:12px;" onclick="applyDefaultDept()">부서 일괄 적용</button>
+    </div>
+    <div class="setting-item">
+      <span>📅 교육기간:</span>
+      <span>YYYY.MM.DD ~ YYYY.MM.DD</span>
+    </div>
+    <div class="setting-item">
+      <span>🔍 사진/통이미지 OCR:</span>
+      <label style="cursor:pointer; display:flex; align-items:center; gap:4px;">
+        <input type="checkbox" id="autoOcrCheckbox" checked> 사진·누락 항목 자동 OCR 보완
+      </label>
+    </div>
+  </div>
+
+  <!-- Dropzone -->
+  <div class="dropzone" id="dropzone">
+    <div class="dropzone-icon">📂</div>
+    <div class="dropzone-title">수료증 파일(PDF, PNG, JPG 등)을 여기에 끌어다 놓으세요</div>
+    <div class="dropzone-desc">여러 개의 파일이나 폴더를 한 번에 드래그하여 등록할 수 있습니다. (PDF 및 일반 사진 파일 지원)</div>
+    <div class="file-buttons" onclick="event.stopPropagation()">
+      <input type="file" id="fileInput" multiple accept="application/pdf, image/*" style="display:none">
+      <input type="file" id="folderInput" webkitdirectory directory multiple style="display:none">
+      <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">📄 파일 선택 (PDF / 사진)</button>
+      <button class="btn" onclick="document.getElementById('folderInput').click()">📁 폴더 선택</button>
+      <button class="btn btn-danger" onclick="clearAllData()">🗑️ 목록 초기화</button>
+    </div>
+  </div>
+
+  <!-- Toolbar & Stats -->
+  <div class="toolbar">
+    <div class="stats">
+      <div class="stat-badge">총 파일: <b id="statTotal">0</b>건</div>
+      <div class="stat-badge">정상 추출: <b id="statSuccess" style="color:var(--success);">0</b>건</div>
+      <div class="stat-badge">사진/검토: <b id="statWarning" style="color:var(--warning);">0</b>건</div>
+    </div>
+    <div style="font-size:12px; color:var(--text-muted);">
+      💡 표의 각 셀을 클릭하여 직접 수정할 수 있습니다.
+    </div>
+  </div>
+
+  <!-- Data Table -->
+  <div class="card">
+    <div class="table-responsive">
+      <table id="resultTable">
+        <thead>
+          <tr>
+            <th style="width: 40px; text-align:center;">#</th>
+            <th style="width: 140px;">부서(명)</th>
+            <th style="width: 90px;">성명</th>
+            <th style="width: 170px;">교육기관</th>
+            <th style="width: 250px;">교육과정명</th>
+            <th style="min-width: 230px;">교육기간</th>
+            <th style="width: 100px;">교육시간</th>
+            <th style="width: 85px; text-align:center;">상태</th>
+            <th style="width: 135px; text-align:center;">관리</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody">
+          <tr id="emptyRow">
+            <td colspan="9" style="text-align:center; padding:40px 20px; color:var(--text-muted);">
+              등록된 수료증 파일이 없습니다. 위 영역에 PDF나 사진 파일(PNG/JPG)을 추가해 주세요.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Modal for Raw Text -->
+<div class="modal-backdrop" id="modal">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3 id="modalTitle">추출 텍스트 원문</h3>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <pre id="modalContent"></pre>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast">알림 메시지</div>
+
+<script>
+  let parsedData = [];
+
+  const dropzone = document.getElementById('dropzone');
+  const fileInput = document.getElementById('fileInput');
+  const folderInput = document.getElementById('folderInput');
+
+  dropzone.addEventListener('dragover', e => {
+    e.preventDefault(); e.stopPropagation();
+    dropzone.classList.add('dragover');
+  });
+  dropzone.addEventListener('dragleave', e => {
+    e.preventDefault(); e.stopPropagation();
+    dropzone.classList.remove('dragover');
+  });
+  dropzone.addEventListener('drop', e => {
+    e.preventDefault(); e.stopPropagation();
+    dropzone.classList.remove('dragover');
+    if (e.dataTransfer && e.dataTransfer.files) {
+      handleFiles(Array.from(e.dataTransfer.files));
+    }
+  });
+  dropzone.addEventListener('click', () => fileInput.click());
+
+  fileInput.addEventListener('change', e => {
+    if (e.target.files) handleFiles(Array.from(e.target.files));
+    fileInput.value = '';
+  });
+  folderInput.addEventListener('change', e => {
+    if (e.target.files) handleFiles(Array.from(e.target.files));
+    folderInput.value = '';
+  });
+
+  function extractNameFromFilename(filename) {
+    return CertificateParser.extractNameFromFilename(filename);
+  }
+
+  async function handleFiles(files) {
+    const validFiles = files.filter(f => {
+      const name = f.name.toLowerCase();
+      return name.endsWith('.pdf') || /\.(png|jpe?g|webp|bmp|gif)$/i.test(name);
+    });
+
+    if (validFiles.length === 0) {
+      showToast('지원되는 파일(PDF 또는 이미지)이 없습니다.');
+      return;
+    }
+
+    showToast(validFiles.length + '개 수료증 분석을 시작합니다...');
+
+    for (const file of validFiles) {
+      if (parsedData.some(d => d.filename === file.name)) continue;
+
+      const isImg = !file.name.toLowerCase().endsWith('.pdf');
+      const nameFromFn = extractNameFromFilename(file.name);
+      const defaultDept = document.getElementById('defaultDeptInput').value.trim() || '평생교육과';
+
+      const item = {
+        id: 'item_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+        filename: file.name,
+        dept: defaultDept,
+        name: nameFromFn || '분석 중...',
+        org: '분석 중...',
+        course: '분석 중...',
+        period: '분석 중...',
+        hours: '분석 중...',
+        status: isImg ? 'ocr_running' : 'loading',
+        rawText: '',
+        isImage: isImg,
+        file: file
+      };
+
+      parsedData.push(item);
+      renderTable();
+
+      try {
+        if (isImg) {
+          await processImageFile(file, item);
+        } else {
+          await parsePdfDocument(file, item);
+        }
+      } catch (err) {
+        console.error('파일 분석 오류:', file.name, err);
+        for (const field of ['name', 'org', 'course', 'period', 'hours']) {
+          if (!item[field] || item[field].includes('분석 중') || item[field].includes('OCR')) item[field] = '확인 필요';
+        }
+        item.status = 'error';
+        item.rawText = '파싱 오류: ' + err.message;
+      }
+      renderTable();
+    }
+    updateStats();
+  }
+
+  async function preprocessImage(imgSource) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const objectUrl = typeof imgSource === 'string' ? null : URL.createObjectURL(imgSource);
+      img.onerror = () => {
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        reject(new Error('이미지 파일을 읽을 수 없습니다.'));
+      };
+      img.onload = () => {
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        const targetWidth = Math.min(2400, Math.max(1786, img.naturalWidth));
+        const scale = targetWidth / img.naturalWidth;
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.naturalWidth * scale);
+        canvas.height = Math.round(img.naturalHeight * scale);
+        const ctx = canvas.getContext('2d');
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+        resolve(canvas);
+      };
+      if (typeof imgSource === 'string') {
+        img.src = imgSource;
+      } else {
+        img.src = objectUrl;
+      }
+    });
+  }
+
+  async function processImageFile(file, item) {
+    const original = Object.fromEntries(['name','dept','org','course','date','period','hours'].map(key => [key,
+      /분석 중|OCR|고정밀/.test(item[key] || '') ? '확인 필요' : item[key]]));
+    item.status = 'ocr_running';
+    item.hours = '고정밀 OCR 중...';
+    renderTable();
+
+    try {
+      if (typeof Tesseract === 'undefined') {
+        throw new Error('Tesseract 엔진 미로드');
+      }
+
+      const preprocessedCanvas = await preprocessImage(file);
+      let res;
+      try { res = await recognizeCertificateCanvas(preprocessedCanvas, item, original); }
+      finally { preprocessedCanvas.width = preprocessedCanvas.height = 0; }
+      const ocrText = res.text;
+      item.rawText = '=== 고정밀 전처리 OCR 결과 ===\n' + ocrText;
+
+      applyDataFields(CertificateParser.mergeMissingFields(original, res.fields), item);
+      showToast(file.name + ' 사진 분석 완료!');
+    } catch (e) {
+      console.warn('OCR 실패:', e);
+      item.status = 'warning';
+      Object.assign(item, original);
+      item.rawText += '\n[OCR 오류] ' + e.message;
+    }
+    renderTable();
+    updateStats();
+  }
+
+  function loadPdf(file) {
+    if (typeof pdfjsLib === 'undefined') throw new Error('PDF 엔진을 불러오지 못했습니다. 같은 폴더의 vendor 폴더를 확인해 주세요.');
+    return file.arrayBuffer().then(data => pdfjsLib.getDocument({
+      data: new Uint8Array(data), isEvalSupported: false
+    }));
+  }
+
+  async function recognizePdfPage(page, item, nativeFields = {...item}) {
+    if (typeof Tesseract === 'undefined') throw new Error('OCR 엔진을 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.');
+    const base = page.getViewport({scale:1});
+    const scale = Math.min(3, 3000 / Math.max(base.width,base.height));
+    const viewport = page.getViewport({scale});
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    try {
+      await page.render({canvasContext: canvas.getContext('2d'), viewport}).promise;
+      return await recognizeCertificateCanvas(canvas, item, nativeFields);
+    } finally { canvas.width = canvas.height = 0; }
+  }
+
+  function recognizeCertificateCanvas(canvas, item, nativeFields = {...item}) {
+    return CertificateOcr.recognize({canvas, Tesseract, parser:CertificateParser,
+      filename:item.filename || '', nativeFields, document,
+      defaultDept:document.getElementById('defaultDeptInput').value.trim() || '평생교육과',
+      logger:m=>{
+        if (m.status === 'recognizing text') {
+          item.hours = 'OCR 판독 중 (' + Math.round((m.progress || 0) * 100) + '%)';
+          renderTable();
+        }
+      }
+    });
+  }
+
+  function ocrResultFields(result, filename) {
+    return result.fields || CertificateParser.extractFields(filename, result,
+      document.getElementById('defaultDeptInput').value.trim() || '평생교육과');
+  }
+
+  async function parsePdfDocument(file, item) {
+    const task = await loadPdf(file);
+    const texts = [];
+    const errors = [];
+    let imagePage = false;
+    try {
+      const pdf = await task.promise;
+      for (let n = 1; n <= pdf.numPages; n++) {
+        const page = await pdf.getPage(n);
+        const content = await page.getTextContent();
+        let text = CertificateParser.linesFromTextItems(content.items, page.getViewport({scale:1})).join('\n');
+        if ((text.match(/[가-힣]/g) || []).length < 20) imagePage = true;
+        texts.push(text);
+        page.cleanup();
+      }
+      const fullText = texts.join('\n\n');
+      item.rawText = fullText;
+      extractDataFields(file.name, fullText, item);
+      const needsOcr = imagePage || item.missingFields.length > 0;
+      if (needsOcr && document.getElementById('autoOcrCheckbox').checked) {
+        const original = {...item};
+        const ocrTexts = [];
+        let ocrFields = {};
+        item.status = 'ocr_running';
+        renderTable();
+        for (let n = 1; n <= pdf.numPages; n++) {
+          const page = await pdf.getPage(n);
+          try {
+            const result = await recognizePdfPage(page, item, original);
+            ocrTexts.push(typeof result === 'string' ? result : result.text);
+            ocrFields = CertificateParser.mergeMissingFields(ocrFields, ocrResultFields(result, file.name));
+          }
+          catch (error) { errors.push(n + '쪽 OCR: ' + error.message); }
+          finally { page.cleanup(); }
+        }
+        const ocrText = ocrTexts.join('\n\n');
+        applyDataFields(CertificateParser.mergeMissingFields(original, ocrFields), item);
+        item.rawText = fullText + '\n\n=== OCR 보완 (누락 항목만 적용) ===\n' + ocrText;
+      } else if (needsOcr) {
+        errors.push('텍스트 또는 필수 항목 부족: OCR 버튼으로 보완하거나 직접 확인해 주세요.');
+      }
+      if (errors.length) item.rawText += '\n\n[확인 사항]\n' + errors.join('\n');
+      item.status = errors.length || item.missingFields.length ? 'warning' : 'success';
+      item.needsOcr = item.missingFields.length > 0;
+    } finally { await task.destroy(); }
+  }
+
+  function extractDataFields(filename, fullText, item) {
+    const defaultDept = document.getElementById('defaultDeptInput').value.trim() || '평생교육과';
+    const fields = CertificateParser.extractFields(filename, fullText, defaultDept);
+    applyDataFields(fields, item);
+  }
+
+  function applyDataFields(fields, item) {
+    Object.assign(item, fields);
+    item.status = fields.missingFields.length ? 'warning' : 'success';
+  }
+
+  function applyDefaultDept() {
+    const d = document.getElementById('defaultDeptInput').value.trim();
+    if (!d) return;
+    let count = 0;
+    for (const item of parsedData) {
+      if (item.dept === '-' || item.dept === '확인 필요' || !item.dept) {
+        item.dept = d;
+        count++;
+      }
+    }
+    renderTable();
+    showToast(count + '개 항목에 부서명(' + d + ')을 적용했습니다.');
+  }
+
+  async function performOcrOnPdf(file, item) {
+    item.status = 'ocr_running';
+    renderTable();
+    let task;
+    const original = Object.fromEntries(['name','dept','org','course','date','period','hours'].map(key => [key,item[key]]));
+    try {
+      task = await loadPdf(file);
+      const pdf = await task.promise;
+      const texts = [];
+      let ocrFields = {};
+      for (let n = 1; n <= pdf.numPages; n++) {
+        const page = await pdf.getPage(n);
+        const result = await recognizePdfPage(page, item, original);
+        texts.push(typeof result === 'string' ? result : result.text);
+        ocrFields = CertificateParser.mergeMissingFields(ocrFields, ocrResultFields(result, file.name));
+        page.cleanup();
+      }
+      const text = texts.join('\n\n');
+      item.rawText += '\n\n=== PDF 전체 페이지 OCR (누락 항목만 적용) ===\n' + text;
+      applyDataFields(CertificateParser.mergeMissingFields(original, ocrFields), item);
+      item.status = item.missingFields.length ? 'warning' : 'success';
+      item.needsOcr = item.missingFields.length > 0;
+      showToast(file.name + ' OCR 완료!');
+    } catch (error) {
+      Object.assign(item,original);
+      item.status = 'warning';
+      item.rawText += '\n[OCR 오류] ' + error.message;
+      showToast('OCR에 실패했습니다. 원문에서 오류 내용을 확인해 주세요.');
+    } finally {
+      if (task) await task.destroy();
+      renderTable();
+      updateStats();
+    }
+  }
+
+  function renderTable() {
+    const tbody = document.getElementById('tableBody');
+    if (parsedData.length === 0) {
+      tbody.innerHTML = `<tr id="emptyRow"><td colspan="9" style="text-align:center; padding:40px 20px; color:var(--text-muted);">등록된 수료증 파일이 없습니다. 위 영역에 PDF나 사진 파일(PNG/JPG)을 추가해 주세요.</td></tr>`;
+      return;
+    }
+
+    let html = '';
+    parsedData.forEach((d, idx) => {
+      let badge = '<span class="badge badge-success">완료</span>';
+      if (d.status === 'loading') badge = '<span class="badge" style="background:#E2E8F0; color:#475569;">분석중...</span>';
+      else if (d.status === 'ocr_running') badge = '<span class="badge badge-info">OCR중...</span>';
+      else if (d.status === 'image_pdf' || d.status === 'warning') badge = '<span class="badge badge-warning">사진/검토</span>';
+      else if (d.status === 'error') badge = '<span class="badge badge-danger">오류</span>';
+
+      html += `
+        <tr data-id="${d.id}">
+          <td style="text-align:center; color:var(--text-muted);">${idx + 1}</td>
+          <td><span class="editable-cell" contenteditable="true" onblur="updateField('${d.id}', 'dept', this.innerText)">${escapeHtml(d.dept)}</span></td>
+          <td><span class="editable-cell" contenteditable="true" onblur="updateField('${d.id}', 'name', this.innerText)" style="font-weight:700;">${escapeHtml(d.name)}</span></td>
+          <td><span class="editable-cell" contenteditable="true" onblur="updateField('${d.id}', 'org', this.innerText)">${escapeHtml(d.org)}</span></td>
+          <td><span class="editable-cell" contenteditable="true" onblur="updateField('${d.id}', 'course', this.innerText)">${escapeHtml(d.course)}</span></td>
+          <td><span class="editable-cell" contenteditable="true" onblur="updateField('${d.id}', 'period', this.innerText)">${escapeHtml(d.period)}</span></td>
+          <td><span class="editable-cell" contenteditable="true" onblur="updateField('${d.id}', 'hours', this.innerText)" style="font-weight:700; color:var(--primary);">${escapeHtml(d.hours)}</span></td>
+          <td style="text-align:center;">${badge}</td>
+          <td style="text-align:center;">
+            <button class="row-btn" onclick="viewRawText('${d.id}')" title="원문 텍스트 확인">🔎 원문</button>
+            <button class="row-btn" onclick="triggerOcr('${d.id}')" title="고정밀 OCR 실행">⚡OCR</button>
+            <button class="row-btn" style="color:var(--danger);" onclick="deleteItem('${d.id}')" title="항목 삭제">✕</button>
+          </td>
+        </tr>
+      `;
+    });
+    tbody.innerHTML = html;
+  }
+
+  function updateField(id, field, value) {
+    const item = parsedData.find(d => d.id === id);
+    if (item) {
+      item[field] = value.trim();
+    }
+  }
+
+  function updateStats() {
+    document.getElementById('statTotal').innerText = parsedData.length;
+    document.getElementById('statSuccess').innerText = parsedData.filter(d => d.status === 'success').length;
+    document.getElementById('statWarning').innerText = parsedData.filter(d => d.status !== 'success').length;
+  }
+
+  function deleteItem(id) {
+    parsedData = parsedData.filter(d => d.id !== id);
+    renderTable();
+    updateStats();
+  }
+
+  function clearAllData() {
+    if (parsedData.length > 0 && !confirm('목록을 모두 초기화하시겠습니까?')) return;
+    parsedData = [];
+    renderTable();
+    updateStats();
+    showToast('전체 목록이 초기화되었습니다.');
+  }
+
+  function triggerOcr(id) {
+    const item = parsedData.find(d => d.id === id);
+    if (item && item.file) {
+      if (item.status === 'loading' || item.status === 'ocr_running') return;
+      if (item.isImage) {
+        processImageFile(item.file, item);
+      } else {
+        performOcrOnPdf(item.file, item);
+      }
+    }
+  }
+
+  function viewRawText(id) {
+    const item = parsedData.find(d => d.id === id);
+    if (!item) return;
+    document.getElementById('modalTitle').innerText = item.filename + ' - 분석 원문';
+    document.getElementById('modalContent').innerText = item.rawText || '(추출된 텍스트가 없습니다. 사진 파일이거나 이미지 PDF입니다. [⚡OCR] 버튼을 눌러보세요.)';
+    document.getElementById('modal').classList.add('show');
+  }
+
+  function closeModal() {
+    document.getElementById('modal').classList.remove('show');
+  }
+
+  function isProcessing() {
+    return parsedData.some(item => item.status === 'loading' || item.status === 'ocr_running');
+  }
+
+  function exportToExcel() {
+    if (isProcessing()) { showToast('분석 완료 후 다운로드해 주세요.'); return; }
+    if (parsedData.length === 0) {
+      alert('내보낼 데이터가 없습니다. PDF나 사진 파일을 먼저 등록해주세요.');
+      return;
+    }
+
+    const headers = ['연번', '부서(명)', '성명', '교육기관', '교육과정명', '교육기간', '교육시간(인정시간)', '파일명'];
+    const rows = parsedData.map((d, idx) => [
+      idx + 1,
+      d.dept,
+      d.name,
+      d.org,
+      d.course,
+      d.period,
+      d.hours,
+      d.filename
+    ]);
+
+    const sheetData = [headers, ...rows];
+    const ws = XLSX.utils.aoa_to_sheet(sheetData);
+
+    ws['!cols'] = [
+      { wch: 6 },
+      { wch: 18 },
+      { wch: 12 },
+      { wch: 22 },
+      { wch: 34 },
+      { wch: 28 },
+      { wch: 16 },
+      { wch: 28 }
+    ];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '수료확인취합');
+
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    XLSX.writeFile(wb, `교육수료증_취합결과_${today}.xlsx`);
+    showToast('엑셀(.xlsx) 파일이 다운로드되었습니다!');
+  }
+
+  function copyTableToClipboard() {
+    if (isProcessing()) { showToast('분석 완료 후 복사해 주세요.'); return; }
+    if (parsedData.length === 0) {
+      alert('복사할 데이터가 없습니다.');
+      return;
+    }
+
+    const headers = ['연번', '부서(명)', '성명', '교육기관', '교육과정명', '교육기간', '교육시간(인정시간)'];
+    const rows = parsedData.map((d, idx) => [
+      idx + 1,
+      d.dept,
+      d.name,
+      d.org,
+      d.course,
+      d.period,
+      d.hours
+    ]);
+
+    const tsv = [headers.join('\t'), ...rows.map(r => r.join('\t'))].join('\n');
+    navigator.clipboard.writeText(tsv).then(() => {
+      showToast('표 데이터가 복사되었습니다! 엑셀 시트에 Ctrl+V 하세요.');
+    }).catch(() => {
+      const ta = document.createElement('textarea');
+      ta.value = tsv;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      showToast('표 데이터가 복사되었습니다! 엑셀 시트에 Ctrl+V 하세요.');
+    });
+  }
+
+  function showToast(msg) {
+    const toast = document.getElementById('toast');
+    toast.innerText = msg;
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 2800);
+  }
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+</script>
+</body>
+</html>
