@@ -199,6 +199,44 @@ function publicFile(file) { return {id:file.id, name:file.name, type:file.type, 
 function visibleCourses(courses) { return courses.filter(course => course.published); }
 function pairId(memberId, courseId) { return `${memberId}:${courseId}`; }
 
+function memberOrdering(members, saved) {
+  const active = new Map(members.filter(member => member.active).map(member => [member.id, member]));
+  const memberIds = [], seen = new Set();
+  for (const id of [...(Array.isArray(saved?.memberIds) ? saved.memberIds : []), ...active.keys()]) {
+    if (active.has(id) && !seen.has(id)) { memberIds.push(id); seen.add(id); }
+  }
+  return {
+    memberOrder: {memberIds, version:saved?.version || 0},
+    members: [...memberIds.map(id => active.get(id)), ...members.filter(member => !member.active)],
+  };
+}
+
+async function saveMemberOrder(request, env) {
+  const body = await readJson(request), expectedVersion = version(body.version, true);
+  if (!Array.isArray(body.memberIds) || body.memberIds.length > 2000) fail(400, '표시 순서에 포함할 부서원 목록을 확인해 주세요.');
+  const memberIds = body.memberIds.map(cleanId), selectedIds = new Set(memberIds);
+  if (selectedIds.size !== memberIds.length) fail(400, '표시 순서에 중복된 부서원이 있습니다.');
+  const [members, saved] = await Promise.all([all(env,'members'),get(env,'settings','member-order')]);
+  if ((saved?.version || 0) !== expectedVersion) conflict();
+  const allIds = new Set(members.map(member => member.id));
+  if (memberIds.some(id => !allIds.has(id))) fail(400, '명단에 없는 부서원이 포함되어 있습니다.');
+  const activeIds = members.filter(member => member.active).map(member => member.id);
+  if (activeIds.length !== memberIds.length || activeIds.some(id => !selectedIds.has(id))) conflict();
+  const item = {id:'member-order',memberIds,version:expectedVersion+1,updatedAt:now(),nonce:uuid()};
+  const serializedIds = stringify(memberIds);
+  // Compare the complete active-ID set inside the same atomic batch as the
+  // order and audit writes. JSON parameters avoid one SQL binding per member.
+  const activeSetGuard = "(SELECT COUNT(*) FROM records WHERE collection = 'members' AND json_extract(data,'$.active') = 1) = json_array_length(?) AND NOT EXISTS (SELECT 1 FROM records AS member WHERE member.collection = 'members' AND json_extract(member.data,'$.active') = 1 AND member.id NOT IN (SELECT value FROM json_each(?)))";
+  const versionGuard = "((? = 0 AND NOT EXISTS (SELECT 1 FROM records WHERE collection = 'settings' AND id = 'member-order')) OR EXISTS (SELECT 1 FROM records WHERE collection = 'settings' AND id = 'member-order' AND version = ?))";
+  const lock = {sql:"EXISTS (SELECT 1 FROM records WHERE collection = 'settings' AND id = 'member-order' AND version = ? AND json_extract(data,'$.nonce') = ?)",values:[item.version,item.nonce]};
+  const results = await env.DB.batch([
+    env.DB.prepare(`INSERT INTO records(collection,id,data,version) SELECT 'settings','member-order',?,? WHERE ${activeSetGuard} AND ${versionGuard} ON CONFLICT(collection,id) DO UPDATE SET data = excluded.data, version = excluded.version`).bind(stringify(item),item.version,serializedIds,serializedIds,expectedVersion,expectedVersion),
+    guardedInsert(env,'audit',auditItem('member_order_updated',{memberIds}),lock),
+  ]);
+  if (!changes(results[0])) conflict();
+  return json({memberOrder:{memberIds,version:item.version}});
+}
+
 async function ensureEnrollment(env, memberId, courseId) {
   const id = pairId(memberId, courseId);
   const initial = {id, memberId, courseId, latestSubmissionId:'', revision:0, nonce:'', version:0};
@@ -519,8 +557,9 @@ async function route(request, env) {
   }
   if (!env.DB || !env.FILES) fail(503,'서버 저장소 연결이 필요합니다.');
   if (path==='/api/bootstrap' && request.method==='GET') {
-    const [courses,members,selected] = await Promise.all([all(env,'courses'),all(env,'members'),session(request,env,'member')]);
-    return json({courses:visibleCourses(courses),members:members.filter(member=>member.active).map(publicMember),selectedMemberId:members.some(member=>member.id===selected?.member_id && member.active) ? selected.member_id : null,serverTime:now()});
+    const [courses,members,selected,savedOrder] = await Promise.all([all(env,'courses'),all(env,'members'),session(request,env,'member'),get(env,'settings','member-order')]);
+    const ordered = memberOrdering(members,savedOrder);
+    return json({courses:visibleCourses(courses),members:ordered.members.filter(member=>member.active).map(publicMember),selectedMemberId:members.some(member=>member.id===selected?.member_id && member.active) ? selected.member_id : null,serverTime:now()});
   }
   if (path==='/api/member-session' && request.method==='POST') {
     const body = await readJson(request);
@@ -549,9 +588,11 @@ async function route(request, env) {
   if (path.startsWith('/api/admin/')) {
     await requireAdmin(request,env);
     if (path==='/api/admin/data' && request.method==='GET') {
-      const [courses,members,submissions,overrides,auditEntries] = await Promise.all(['courses','members','submissions','overrides','audit'].map(collection=>all(env,collection)));
-      return json({courses,members,submissions,overrides,audit:auditEntries.sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,500),serverTime:now()});
+      const [courses,members,submissions,overrides,auditEntries,savedOrder] = await Promise.all([...['courses','members','submissions','overrides','audit'].map(collection=>all(env,collection)),get(env,'settings','member-order')]);
+      const ordered = memberOrdering(members,savedOrder);
+      return json({courses,members:ordered.members,memberOrder:ordered.memberOrder,submissions,overrides,audit:auditEntries.sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,500),serverTime:now()});
     }
+    if (path==='/api/admin/member-order' && request.method==='PUT') return saveMemberOrder(request,env);
     if (path==='/api/admin/courses' && request.method==='POST') return saveCourse(request,env);
     match = /^\/api\/admin\/courses\/([\w:-]+)$/.exec(path);
     if (match && request.method==='PUT') return saveCourse(request,env,match[1]);

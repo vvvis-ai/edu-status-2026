@@ -82,6 +82,140 @@ test('course edits use optimistic concurrency, and member edits preserve histori
   assert.ok(data.audit.some(entry=>entry.action==='member_updated' && entry.detail.before.team==='총무팀' && entry.detail.after.team==='새로운팀'));
 });
 
+test('member order defaults to existing ID order, persists for public/admin views and preserves education and personnel records',async t=>{
+  const f=await fixture(t,{courses:[course('c1')],members:[member('m2'),member('left',{active:false}),member('m1',{legacyCompletions:['c1']})]});
+  const admin=await f.login(),selected=await f.select('m2');
+  assert.equal((await f.call('/admin/member-order',{method:'PUT',body:{memberIds:['m2','m1'],version:0}})).status,401);
+  assert.equal((await f.call('/admin/member-order',{method:'PUT',cookie:selected,body:{memberIds:['m2','m1'],version:0}})).status,401);
+  const initial=await (await f.call('/admin/data',{cookie:admin})).json();
+  assert.deepEqual(initial.memberOrder,{memberIds:['m1','m2'],version:0});
+  assert.deepEqual(initial.members.map(value=>value.id),['m1','m2','left']);
+  assert.deepEqual((await (await f.call('/bootstrap')).json()).members.map(value=>value.id),['m1','m2']);
+  const submissionResponse=await f.call('/submissions',{method:'POST',cookie:selected,body:f.form({file:PNG,name:'가상수료증.png',type:'image/png',expectedMemberId:'m2'})});
+  assert.equal(submissionResponse.status,201);
+  const submission=(await submissionResponse.json()).submission;
+  const before=await f.env.DB.prepare("SELECT collection,id,data,version FROM records WHERE collection NOT IN ('settings','audit') ORDER BY collection,id").all();
+  const response=await f.call('/admin/member-order',{method:'PUT',cookie:admin,body:{memberIds:['m2','m1'],version:0}});
+  assert.equal(response.status,200);
+  assert.deepEqual((await response.json()).memberOrder,{memberIds:['m2','m1'],version:1});
+  const data=await (await f.call('/admin/data',{cookie:admin})).json();
+  assert.deepEqual(data.memberOrder,{memberIds:['m2','m1'],version:1});
+  assert.deepEqual(data.members.map(value=>value.id),['m2','m1','left']);
+  assert.deepEqual((await (await f.call('/bootstrap')).json()).members.map(value=>value.id),['m2','m1']);
+  const after=await f.env.DB.prepare("SELECT collection,id,data,version FROM records WHERE collection NOT IN ('settings','audit') ORDER BY collection,id").all();
+  assert.deepEqual(after.results,before.results,'sorting changes no staff version, completion, submission, file or education record');
+  const original=await f.call(`/files/${submission.files[0].id}`,{cookie:selected});
+  assert.deepEqual(Buffer.from(await original.arrayBuffer()),PNG);
+  const audits=data.audit.filter(value=>value.action==='member_order_updated');
+  assert.equal(audits.length,1);
+  assert.deepEqual(audits[0].detail.memberIds,['m2','m1']);
+  assert.equal((await f.env.DB.prepare("SELECT COUNT(*) AS count FROM records WHERE collection = 'settings' AND id = 'member-order'").first()).count,1);
+});
+
+test('member order validates complete current membership, duplicate/unknown IDs, versions and an empty active roster',async t=>{
+  const f=await fixture(t,{courses:[course('c1')],members:[member('m1'),member('m2'),member('left',{active:false})]}),admin=await f.login();
+  for(const [body,status] of [
+    [{version:0},400],[{memberIds:'m1',version:0},400],[{memberIds:['m1','m1'],version:0},400],
+    [{memberIds:['m1','unknown'],version:0},400],[{memberIds:['m1',2],version:0},400],
+    [{memberIds:['m1'],version:0},409],[{memberIds:['m1','m2','left'],version:0},409],
+    [{memberIds:['m1','m2']},400],[{memberIds:['m1','m2'],version:-1},400],[{memberIds:['m1','m2'],version:1},409],
+  ]) assert.equal((await f.call('/admin/member-order',{method:'PUT',cookie:admin,body})).status,status);
+  assert.equal((await f.env.DB.prepare("SELECT COUNT(*) AS count FROM records WHERE collection = 'settings'").first()).count,0);
+  assert.equal((await f.env.DB.prepare("SELECT COUNT(*) AS count FROM records WHERE collection = 'audit'").first()).count,0);
+  const empty=await fixture(t,{courses:[],members:[member('left',{active:false})]}),emptyAdmin=await empty.login();
+  const response=await empty.call('/admin/member-order',{method:'PUT',cookie:emptyAdmin,body:{memberIds:[],version:0}});
+  assert.equal(response.status,200);
+  assert.deepEqual((await response.json()).memberOrder,{memberIds:[],version:1});
+});
+
+test('member order appends newly added employees and ignores inactive saved IDs without modifying its version',async t=>{
+  const f=await fixture(t),admin=await f.login();
+  assert.equal((await f.call('/admin/member-order',{method:'PUT',cookie:admin,body:{memberIds:['m2','m1'],version:0}})).status,200);
+  const createdResponse=await f.call('/admin/members',{method:'POST',cookie:admin,body:{name:'가상신규직원',team:'가상팀',active:true}});
+  assert.equal(createdResponse.status,201);
+  const newcomer=(await createdResponse.json()).member;
+  const added=await (await f.call('/admin/data',{cookie:admin})).json();
+  assert.deepEqual(added.memberOrder,{memberIds:['m2','m1',newcomer.id],version:1});
+  assert.equal((await f.call('/admin/member-order',{method:'PUT',cookie:admin,body:{memberIds:['m2','m1'],version:1}})).status,409);
+  assert.equal((await f.call('/admin/members/m2',{method:'PUT',cookie:admin,body:{...member('m2'),active:false,leftOn:'2026-10-01'}})).status,200);
+  const transferred=await (await f.call('/admin/data',{cookie:admin})).json();
+  assert.deepEqual(transferred.memberOrder,{memberIds:['m1',newcomer.id],version:1});
+  assert.deepEqual((await (await f.call('/bootstrap')).json()).members.map(value=>value.id),['m1',newcomer.id]);
+  assert.equal((await f.call('/admin/member-order',{method:'PUT',cookie:admin,body:{memberIds:['m2','m1',newcomer.id],version:1}})).status,409);
+  const saved=await f.call('/admin/member-order',{method:'PUT',cookie:admin,body:{memberIds:[newcomer.id,'m1'],version:1}});
+  assert.equal(saved.status,200);
+  assert.deepEqual((await saved.json()).memberOrder,{memberIds:[newcomer.id,'m1'],version:2});
+  assert.equal((await f.call('/admin/member-order',{method:'PUT',cookie:admin,body:{memberIds:['m1',newcomer.id],version:1}})).status,409);
+});
+
+test('simultaneous initial and subsequent member-order saves each accept one result and produce one audit',async t=>{
+  const f=await fixture(t),admin=await f.login();
+  for(const expectedVersion of [0,1]) {
+    const batch=f.env.DB.batch.bind(f.env.DB);
+    let calls=0,release;
+    const barrier=new Promise(resolve=>{release=resolve;});
+    f.env.DB.batch=async statements=>{if(++calls===2)release();await barrier;return batch(statements);};
+    const responses=await Promise.all([
+      f.call('/admin/member-order',{method:'PUT',cookie:admin,body:{memberIds:['m1','m2'],version:expectedVersion}}),
+      f.call('/admin/member-order',{method:'PUT',cookie:admin,body:{memberIds:['m2','m1'],version:expectedVersion}}),
+    ]);
+    f.env.DB.batch=batch;
+    assert.deepEqual(responses.map(response=>response.status).sort(),[200,409]);
+    const saved=(await responses.find(response=>response.status===200).json()).memberOrder;
+    const data=await (await f.call('/admin/data',{cookie:admin})).json();
+    assert.deepEqual(data.memberOrder,saved);
+    assert.equal(data.memberOrder.version,expectedVersion+1);
+    assert.equal(data.audit.filter(value=>value.action==='member_order_updated').length,expectedVersion+1);
+    assert.equal((await f.env.DB.prepare("SELECT COUNT(*) AS count FROM records WHERE collection = 'settings'").first()).count,1);
+  }
+});
+
+for(const rosterChange of ['addition','transfer','replacement']) test(`member-order atomic membership guard rejects a concurrent ${rosterChange} without saving an order or audit`,async t=>{
+  const f=await fixture(t),admin=await f.login();
+  assert.equal((await f.call('/admin/member-order',{method:'PUT',cookie:admin,body:{memberIds:['m1','m2'],version:0}})).status,200);
+  const before=await f.env.DB.prepare("SELECT data FROM records WHERE collection = 'settings' AND id = 'member-order'").first();
+  const batch=f.env.DB.batch.bind(f.env.DB); let changed=false;
+  f.env.DB.batch=async statements=>{
+    if(!changed) {
+      changed=true; const mutations=[];
+      if(rosterChange!=='transfer')mutations.push(f.env.DB.prepare('INSERT INTO records(collection,id,data,version) VALUES(?,?,?,?)').bind('members','m3',JSON.stringify(member('m3')),1));
+      if(rosterChange!=='addition')mutations.push(f.env.DB.prepare("UPDATE records SET data = ?, version = 2 WHERE collection = 'members' AND id = 'm2'").bind(JSON.stringify(member('m2',{active:false,version:2}))));
+      await batch(mutations);
+    }
+    return batch(statements);
+  };
+  const response=await f.call('/admin/member-order',{method:'PUT',cookie:admin,body:{memberIds:['m2','m1'],version:1}});
+  assert.equal(response.status,409);
+  assert.equal((await response.json()).code,'VERSION_CONFLICT');
+  assert.deepEqual(await f.env.DB.prepare("SELECT data FROM records WHERE collection = 'settings' AND id = 'member-order'").first(),before);
+  assert.equal((await f.env.DB.prepare("SELECT COUNT(*) AS count FROM records WHERE collection = 'audit' AND json_extract(data,'$.action') = 'member_order_updated'").first()).count,1);
+});
+
+test('member-order saving permits a concurrent team and position edit and uses bounded JSON-list SQL parameters',async t=>{
+  const members=Array.from({length:125},(_,index)=>member(`m${String(index).padStart(3,'0')}`));
+  const f=await fixture(t,{courses:[course('c1')],members}),admin=await f.login();
+  const batch=f.env.DB.batch.bind(f.env.DB),prepare=f.env.DB.prepare.bind(f.env.DB); let edited=false;
+  f.env.DB.prepare=sql=>{
+    const statement=prepare(sql),bind=statement.bind.bind(statement);
+    statement.bind=(...values)=>{assert.ok(values.length<100,'member arrays must not become one SQL parameter per employee');return bind(...values);};
+    return statement;
+  };
+  f.env.DB.batch=async statements=>{
+    if(!edited) {
+      edited=true;
+      await batch([prepare("UPDATE records SET data = ?, version = 2 WHERE collection = 'members' AND id = 'm000'").bind(JSON.stringify(member('m000',{team:'변경팀',position:'변경직급',version:2})))]);
+    }
+    return batch(statements);
+  };
+  const ids=members.map(value=>value.id).reverse();
+  const response=await f.call('/admin/member-order',{method:'PUT',cookie:admin,body:{memberIds:ids,version:0}});
+  assert.equal(response.status,200);
+  assert.deepEqual((await response.json()).memberOrder,{memberIds:ids,version:1});
+  const data=await (await f.call('/admin/data',{cookie:admin})).json();
+  const changed=data.members.find(value=>value.id==='m000');
+  assert.equal(changed.team,'변경팀');assert.equal(changed.position,'변경직급');assert.equal(changed.version,2);
+});
+
 test('personnel history requires an administrator and distinguishes missing members from empty history',async t=>{
   const f=await fixture(t);
   assert.equal((await f.call('/admin/members/m1/history')).status,401);

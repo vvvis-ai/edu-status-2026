@@ -17,6 +17,10 @@ let downloadCourseId = null;
 let reviewSubmissionId = null;
 let previewController = null;
 let previewUrl = '';
+let memberOrderDraft = [];
+let memberOrderVersion = 0;
+let memberOrderBusy = false;
+let memberOrderDraggingId = null;
 let loading = false;
 
 function setError(element, message) { element.textContent = message || ''; element.hidden = !message; }
@@ -128,6 +132,62 @@ function renderMembers() {
   const rows = data.members.filter(member => (active === 'all' || member.active === (active === 'active')) && includesQuery(member.name, member.team, member.position));
   $('#memberTableBody').innerHTML = rows.map(member => `<tr><td><strong>${e(member.name)}</strong></td><td>${e(member.team || '—')}</td><td>${e(member.position || '—')}</td><td>${formatDate(member.joinedOn)}<span class="subline">전출 ${formatDate(member.leftOn)}</span></td><td><span class="badge ${member.active ? 'success' : 'muted'}">${member.active ? '재직' : '전출·비활성'}</span></td><td><button type="button" class="button secondary" data-member-edit="${e(member.id)}">수정</button></td></tr>`).join('');
   $('#memberEmpty').hidden = rows.length > 0;
+  $('#editMemberOrderButton').disabled = data.members.filter(member => member.active).length < 2;
+}
+
+function resetMemberOrderDraft() {
+  memberOrderDraft = data.members.filter(member => member.active).map(member => member.id);
+  memberOrderVersion = data.memberOrder?.version || 0;
+}
+function renderMemberOrder() {
+  const members = new Map(data.members.map(member => [member.id, member]));
+  $('#memberOrderCount').textContent = `재직 부서원 ${memberOrderDraft.length}명`;
+  $('#memberOrderList').innerHTML = memberOrderDraft.map((id, index) => {
+    const member = members.get(id);
+    return `<li class="member-order-row" data-order-member="${e(id)}" draggable="${!memberOrderBusy}" tabindex="-1"><span class="member-order-number">${index + 1}</span><div class="member-order-name"><strong>${e(member.name)}</strong><small>${e([member.team, member.position].filter(Boolean).join(' · '))}</small></div><div class="member-order-controls"><button type="button" class="button secondary" data-order-move="up" data-order-id="${e(id)}" aria-label="${e(member.name)} 위로 이동" ${memberOrderBusy || index === 0 ? 'disabled' : ''}>↑</button><button type="button" class="button secondary" data-order-move="down" data-order-id="${e(id)}" aria-label="${e(member.name)} 아래로 이동" ${memberOrderBusy || index === memberOrderDraft.length - 1 ? 'disabled' : ''}>↓</button></div></li>`;
+  }).join('');
+  $('#saveMemberOrderButton').disabled = memberOrderBusy || memberOrderDraft.length < 2;
+  $('#reloadMemberOrderButton').disabled = memberOrderBusy;
+  for (const button of $$('[data-close="memberOrderDialog"]')) button.disabled = memberOrderBusy;
+}
+function openMemberOrder() {
+  if (loading) { showToast('최신 명단을 불러오는 중입니다. 잠시 후 다시 선택해 주세요.', 'info'); return; }
+  resetMemberOrderDraft(); memberOrderDraggingId = null;
+  setError($('#memberOrderError'), ''); $('#memberOrderAnnouncement').textContent = '';
+  renderMemberOrder(); openDialog($('#memberOrderDialog'));
+}
+function moveMemberOrder(id, destination, direction) {
+  if (memberOrderBusy) return;
+  const source = memberOrderDraft.indexOf(id);
+  if (source < 0 || destination < 0 || destination >= memberOrderDraft.length || source === destination) return;
+  memberOrderDraft.splice(source, 1); memberOrderDraft.splice(destination, 0, id);
+  renderMemberOrder();
+  const member = data.members.find(item => item.id === id);
+  $('#memberOrderAnnouncement').textContent = `${member.name} 님을 ${destination + 1}번째로 옮겼습니다.`;
+  const row = $$('#memberOrderList [data-order-member]').find(item => item.dataset.orderMember === id);
+  const sameButton = direction ? $(`[data-order-move="${direction}"]`, row) : null;
+  (sameButton && !sameButton.disabled ? sameButton : row).focus();
+}
+async function reloadMemberOrder() {
+  if (memberOrderBusy || loading) return;
+  memberOrderBusy = true; renderMemberOrder(); setError($('#memberOrderError'), '');
+  try {
+    await loadData(); resetMemberOrderDraft();
+    $('#memberOrderAnnouncement').textContent = '저장된 최신 순서와 명단을 불러왔습니다.';
+  } catch (error) { setError($('#memberOrderError'), error.message); }
+  finally { memberOrderBusy = false; renderMemberOrder(); }
+}
+async function saveMemberOrder(event) {
+  event.preventDefault(); if (memberOrderBusy) return;
+  memberOrderBusy = true; renderMemberOrder(); setError($('#memberOrderError'), '');
+  busy($('#saveMemberOrderButton'), true, '순서를 저장하고 있습니다…');
+  try {
+    await api('/admin/member-order', {method:'PUT', body:{memberIds:[...memberOrderDraft],version:memberOrderVersion}});
+    closeDialog($('#memberOrderDialog')); showToast('이름 표시 순서를 저장했습니다. 교육 안내 페이지를 새로고침하면 반영됩니다.');
+    try { await loadData(); } catch { showToast('순서는 저장됐습니다. 최신 명단을 보려면 새로고침해 주세요.', 'info'); }
+  } catch (error) {
+    setError($('#memberOrderError'), error.status === 409 ? `${error.message} ‘최신 순서 불러오기’를 누른 뒤 다시 편집해 주세요.` : error.message);
+  } finally { memberOrderBusy = false; busy($('#saveMemberOrderButton'), false); renderMemberOrder(); }
 }
 function statusRows() {
   return {courses: publishedCourses(), members: data.members.filter(member => member.active && includesQuery(member.name, member.team, member.position))};
@@ -407,6 +467,38 @@ for (const id of ['yearFilter', 'periodFilter', 'reviewStatusFilter', 'courseVis
 $('#adminSearch').addEventListener('input', render);
 $('#newCourseButton').addEventListener('click', () => openCourse());
 $('#newMemberButton').addEventListener('click', () => openMember());
+$('#editMemberOrderButton').addEventListener('click', openMemberOrder);
+$('#reloadMemberOrderButton').addEventListener('click', reloadMemberOrder);
+$('#memberOrderForm').addEventListener('submit', saveMemberOrder);
+$('#memberOrderDialog').addEventListener('cancel', event => { if (memberOrderBusy) event.preventDefault(); });
+$('#memberOrderList').addEventListener('click', event => {
+  const button = event.target.closest('[data-order-move]'); if (!button || memberOrderBusy) return;
+  const id = button.dataset.orderId, index = memberOrderDraft.indexOf(id);
+  moveMemberOrder(id, index + (button.dataset.orderMove === 'up' ? -1 : 1), button.dataset.orderMove);
+});
+$('#memberOrderList').addEventListener('dragstart', event => {
+  const row = event.target.closest('[data-order-member]');
+  if (memberOrderBusy || !row || !memberOrderDraft.includes(row.dataset.orderMember)) { event.preventDefault(); return; }
+  memberOrderDraggingId = row.dataset.orderMember;
+  event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', memberOrderDraggingId);
+});
+$('#memberOrderList').addEventListener('dragover', event => {
+  event.preventDefault(); if (memberOrderBusy || !memberOrderDraggingId) return;
+  event.dataTransfer.dropEffect = 'move';
+  const row = event.target.closest('[data-order-member]');
+  $$('#memberOrderList .is-drag-target').forEach(item => item.classList.remove('is-drag-target'));
+  if (row && row.dataset.orderMember !== memberOrderDraggingId) row.classList.add('is-drag-target');
+});
+$('#memberOrderList').addEventListener('drop', event => {
+  event.preventDefault(); if (memberOrderBusy || !memberOrderDraggingId) return;
+  const row = event.target.closest('[data-order-member]');
+  if (row) moveMemberOrder(memberOrderDraggingId, memberOrderDraft.indexOf(row.dataset.orderMember));
+  memberOrderDraggingId = null;
+});
+$('#memberOrderList').addEventListener('dragend', () => {
+  memberOrderDraggingId = null;
+  $$('#memberOrderList .is-drag-target').forEach(item => item.classList.remove('is-drag-target'));
+});
 $('#courseForm').addEventListener('submit', saveCourse);
 $('#memberForm').addEventListener('submit', saveMember);
 $('#downloadForm').addEventListener('submit', downloadZip);

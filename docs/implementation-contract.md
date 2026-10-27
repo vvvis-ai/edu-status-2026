@@ -23,6 +23,8 @@
 - GET /api/admin/data → `{courses,members,submissions,overrides,audit,serverTime}`.
 - POST /api/admin/courses → `{course}`, PUT /api/admin/courses/:id + version → `{course}`.
 - POST /api/admin/members → `{member}`, PUT /api/admin/members/:id + version → `{member}`.
+- GET /api/admin/data의 `memberOrder:{memberIds,version}`는 현재 재직자 전체의 표시 순서와 독립 버전(미설정 시 0). `members`와 공개 bootstrap 명단도 해당 순서로 반환.
+- PUT /api/admin/member-order `{memberIds:현재 재직자 전원 ID,version}` → `{memberOrder}`. 관리자 전용. 중복·없는 ID는400, 버전 또는 재직자 집합 변경은409. 별도 `settings/member-order` 레코드와 감사로그만 원자적으로 저장하며 부서원 버전·이수·제출 기록은 변경하지 않음. 저장 순서에 없는 신규 재직자는 끝에 표시.
 - GET /api/admin/members/:id/history → `{history,serverTime}`. 관리자 전용, 해당 부서원의 등록·인사 변경 감사 이력을 최신순으로 전량 조회. 대시보드의 최근 감사로그 500건 제한과 독립.
 - POST /api/admin/submissions/:id/review `{status:'approved'|'needs_revision',reviewNote,version}` → `{submission}`. 최신 제출만 검토.
 - PUT /api/admin/overrides/:memberId/:courseId `{status:'approved'|'not_submitted'|'exempt'|'clear',reason,version:0또는현재값}` → `{override}`. 수동 처리는 사유 필수. 검토보다 override 우선. 새 제출/검토 시 override 제거해 새 결과 반영.
