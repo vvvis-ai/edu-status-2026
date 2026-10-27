@@ -101,7 +101,59 @@ function changes(result) { return Number(result?.meta?.changes || 0); }
 function conflict() { fail(409, '다른 작업으로 자료가 변경되었습니다. 새로고침 후 다시 시도해 주세요.', 'VERSION_CONFLICT'); }
 
 function auditItem(action, detail, actor = 'admin') { return {id:uuid(), action, detail, actor, createdAt:now(), version:1}; }
-async function audit(env, action, detail, actor) { await insert(env, 'audit', auditItem(action, detail, actor)).run(); }
+
+function fileAccessAudit(file, actor, accessMode, requestId, requestAcceptedAt) {
+  return auditItem('certificate_access_requested', {
+    fileId:file.id, courseId:file.courseId, memberId:file.memberId, submissionId:file.submissionId,
+    actorRole:actor.role, identityAssurance:actor.identityAssurance, accessMode, requestAcceptedAt, requestId,
+  },actor.id);
+}
+
+async function recordFileAccess(env, entries) {
+  try {
+    // One statement keeps a ZIP's per-file requests and legacy summary atomic,
+    // without consuming one D1 query or bound parameter per selected file.
+    const result = await env.DB.prepare("INSERT INTO records(collection,id,data,version) SELECT 'audit',json_extract(value,'$.id'),value,1 FROM json_each(?)").bind(stringify(entries)).run();
+    if (result?.success === false || changes(result) !== entries.length) throw new Error('Access audit count mismatch');
+  } catch {
+    fail(503,'파일 접근 요청 기록을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.','FILE_ACCESS_AUDIT_FAILED');
+  }
+}
+
+function accessCursor(entry) {
+  return btoa(stringify({createdAt:entry.createdAt,id:entry.id})).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+
+function readAccessCursor(value) {
+  if (!value) return null;
+  try {
+    if (!/^[A-Za-z0-9_-]{1,512}$/.test(value)) throw new Error('Invalid cursor encoding');
+    const cursor = JSON.parse(atob(value.replace(/-/g,'+').replace(/_/g,'/')));
+    if (!cursor || Array.isArray(cursor) || typeof cursor.createdAt !== 'string'
+        || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(cursor.createdAt)
+        || new Date(cursor.createdAt).toISOString() !== cursor.createdAt) throw new Error('Invalid cursor date');
+    return {createdAt:cursor.createdAt,id:cleanId(cursor.id)};
+  } catch { fail(400,'파일 요청 기록의 조회 위치가 올바르지 않습니다. 처음부터 다시 조회해 주세요.'); }
+}
+
+async function listFileAccess(env, url) {
+  const rawLimit = url.searchParams.get('limit');
+  const limit = rawLimit == null ? 50 : Number(rawLimit);
+  if ((rawLimit != null && !/^\d{1,3}$/.test(rawLimit)) || !Number.isInteger(limit) || limit < 1 || limit > 100) fail(400,'파일 요청 기록은 한 번에 1~100건까지 조회할 수 있습니다.');
+  const rawFileId = url.searchParams.get('fileId');
+  const fileId = rawFileId ? cleanId(rawFileId) : '';
+  const cursor = readAccessCursor(url.searchParams.get('cursor'));
+  const conditions = ["collection = 'audit'","json_extract(data,'$.action') = 'certificate_access_requested'"];
+  const values = [];
+  if (fileId) { conditions.push("json_extract(data,'$.detail.fileId') = ?"); values.push(fileId); }
+  if (cursor) {
+    conditions.push("(json_extract(data,'$.createdAt') < ? OR (json_extract(data,'$.createdAt') = ? AND id < ?))");
+    values.push(cursor.createdAt,cursor.createdAt,cursor.id);
+  }
+  const result = await env.DB.prepare(`SELECT data FROM records WHERE ${conditions.join(' AND ')} ORDER BY json_extract(data,'$.createdAt') DESC,id DESC LIMIT ?`).bind(...values,limit+1).all();
+  const entries = result.results.slice(0,limit).map(row => JSON.parse(row.data));
+  return json({entries,nextCursor:result.results.length > limit ? accessCursor(entries.at(-1)) : null,serverTime:now()});
+}
 
 async function saveWithAudit(env, collection, item, expectedVersion, entry) {
   const nonce = uuid();
@@ -145,7 +197,11 @@ async function session(request, env, role) {
   return env.DB.prepare('SELECT * FROM sessions WHERE token_hash = ? AND role = ? AND expires_at > ?').bind(hash, role, Date.now()).first();
 }
 
-async function requireAdmin(request, env) { if (!await session(request, env, 'admin')) fail(401, '관리자 로그인이 필요합니다.', 'ADMIN_AUTH_REQUIRED'); }
+async function requireAdmin(request, env) {
+  const value = await session(request, env, 'admin');
+  if (!value) fail(401, '관리자 로그인이 필요합니다.', 'ADMIN_AUTH_REQUIRED');
+  return value;
+}
 
 async function requireMember(request, env) {
   const value = await session(request, env, 'member');
@@ -525,9 +581,12 @@ function filePropagating() { fail(503,'파일을 저장소에 반영 중입니�
 
 async function fileResponse(request, env, fileId, url) {
   const file = await required(env,'files',fileId,'첨부파일을 찾을 수 없습니다.');
-  if (!await session(request,env,'admin')) {
+  const adminSession = await session(request,env,'admin');
+  let actor = {id:'admin',role:adminSession?.role,identityAssurance:'shared_admin_password'};
+  if (!adminSession) {
     const member = await requireMember(request,env);
     if (file.memberId !== member.id) fail(403,'본인의 제출 파일만 열람할 수 있습니다.');
+    actor = {id:member.id,role:'member',identityAssurance:'name_selection_unverified'};
   }
   const object = await env.FILES.get(file.key);
   if (!object && mayBePropagating(env,file)) filePropagating();
@@ -536,16 +595,26 @@ async function fileResponse(request, env, fileId, url) {
     await object.body?.cancel();
     fail(409,'저장된 파일의 크기가 다릅니다. 담당자에게 문의해 주세요.');
   }
-  return new Response(object.body,{headers:{'Content-Type':file.type,'Content-Length':String(file.size),'Content-Disposition':disposition(url.searchParams.get('download')==='1' ? 'attachment':'inline',file.name),'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox"}});
+  const download = url.searchParams.get('download') === '1';
+  try {
+    // This records server acceptance, not a completed transfer or a verified
+    // individual: name selection and the shared admin password remain as-is.
+    await recordFileAccess(env,[fileAccessAudit(file,actor,download ? 'download':'preview',uuid(),now())]);
+    return new Response(object.body,{headers:{'Content-Type':file.type,'Content-Length':String(file.size),'Content-Disposition':disposition(download ? 'attachment':'inline',file.name),'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox"}});
+  } catch (error) {
+    await object.body?.cancel().catch(() => {});
+    throw error;
+  }
 }
 
-async function zipResponse(request, env, courseId, url) {
+async function zipResponse(request, env, courseId, url, adminSession) {
+  const actor = {id:'admin',role:adminSession.role,identityAssurance:'shared_admin_password'};
   const course = await required(env,'courses',courseId);
   const scope = url.searchParams.get('scope') || 'approved';
   if (!['approved','latest'].includes(scope)) fail(400,'다운로드 범위를 확인해 주세요.');
   const [members,submissions,overrides,files] = await Promise.all(['members','submissions','overrides','files'].map(collection => all(env,collection)));
   const fileMap = new Map(files.map(file=>[file.id,file]));
-  const entries = [];
+  const entries = [], accessFiles = [];
   let total = 0;
   for (const member of members) {
     const latest = getLatestSubmission(submissions,member.id,course.id);
@@ -568,10 +637,15 @@ async function zipResponse(request, env, courseId, url) {
         if (Number(object.size)!==file.size) { await object.body?.cancel(); throw new Error('다운로드 중 파일 크기가 변경되었습니다. 담당자에게 문의해 주세요.'); }
         return object.body;
       }});
+      accessFiles.push(stored);
     }
   }
   if (!entries.length) fail(404,scope==='approved' ? '최신 제출본 중 승인된 수료증 파일이 없습니다.' : '제출된 수료증 파일이 없습니다.');
-  await audit(env,'certificates_downloaded',{courseId:course.id,scope,fileCount:entries.length,totalBytes:total});
+  const requestId = uuid(), requestAcceptedAt = now();
+  await recordFileAccess(env,[
+    ...accessFiles.map(file => fileAccessAudit(file,actor,'zip',requestId,requestAcceptedAt)),
+    auditItem('certificates_downloaded',{courseId:course.id,scope,fileCount:entries.length,totalBytes:total,requestId,requestAcceptedAt,actorRole:actor.role,identityAssurance:actor.identityAssurance},actor.id),
+  ]);
   return new Response(createZip(entries),{headers:{'Content-Type':'application/zip','Content-Disposition':disposition('attachment',`${safeName(course.name)}_${scope==='approved'?'승인본':'최신제출본'}_${today()}.zip`),'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
 }
 
@@ -657,11 +731,12 @@ async function route(request, env) {
     return json({ok:true},200,{'Set-Cookie':cookieHeader(request,'admin','',0)});
   }
   if (path.startsWith('/api/admin/')) {
-    await requireAdmin(request,env);
+    const adminSession = await requireAdmin(request,env);
+    if (path==='/api/admin/file-access' && request.method==='GET') return listFileAccess(env,url);
     if (path==='/api/admin/data' && request.method==='GET') {
-      const [courses,members,submissions,overrides,auditEntries,savedOrder,savedChart] = await Promise.all([...['courses','members','submissions','overrides','audit'].map(collection=>all(env,collection)),get(env,'settings','member-order'),get(env,'settings','department-chart')]);
+      const [courses,members,submissions,overrides,auditRows,savedOrder,savedChart] = await Promise.all([...['courses','members','submissions','overrides'].map(collection=>all(env,collection)),env.DB.prepare("SELECT data FROM records WHERE collection = 'audit' ORDER BY json_extract(data,'$.createdAt') DESC,id DESC LIMIT 500").all(),get(env,'settings','member-order'),get(env,'settings','department-chart')]);
       const ordered = memberOrdering(members,savedOrder);
-      return json({courses,members:ordered.members,memberOrder:ordered.memberOrder,departmentChart:departmentChart(ordered.members,savedChart),submissions,overrides,audit:auditEntries.sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,500),serverTime:now()});
+      return json({courses,members:ordered.members,memberOrder:ordered.memberOrder,departmentChart:departmentChart(ordered.members,savedChart),submissions,overrides,audit:auditRows.results.map(row=>JSON.parse(row.data)),serverTime:now()});
     }
     if (path==='/api/admin/member-order' && request.method==='PUT') return saveMemberOrder(request,env);
     if (path==='/api/admin/department-chart' && request.method==='PUT') return saveDepartmentChart(request,env);
@@ -684,7 +759,7 @@ async function route(request, env) {
     match = /^\/api\/admin\/overrides\/([\w-]+)\/([\w-]+)$/.exec(path);
     if (match && request.method==='PUT') return override(request,env,match[1],match[2]);
     match = /^\/api\/admin\/courses\/([\w:-]+)\/download$/.exec(path);
-    if (match && request.method==='GET') return zipResponse(request,env,match[1],url);
+    if (match && request.method==='GET') return zipResponse(request,env,match[1],url,adminSession);
     if (path==='/api/admin/import-legacy' && request.method==='POST') return importLegacy(request,env);
   }
   fail(404,'요청한 기능을 찾을 수 없습니다.');

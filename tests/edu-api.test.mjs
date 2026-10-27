@@ -457,6 +457,172 @@ test('PDF upload persists original bytes and prevents another selected person re
   assert.equal((await f.call(`/files/${submission.files[0].id}?download=1`,{cookie:admin})).status,200);
 });
 
+test('file access requests record server-derived roles without original names, contents or credentials',async t=>{
+  const f=await fixture(t),cookie=await f.select(),admin=await f.login();
+  const originalName='가상직원_1990-01-02_원본.png';
+  const submitted=await f.call('/submissions',{method:'POST',cookie,body:f.form({file:PNG,name:originalName,type:'image/png'})});
+  assert.equal(submitted.status,201);
+  const submission=(await submitted.json()).submission,file=submission.files[0];
+  const readAudits=async()=>((await f.env.DB.prepare("SELECT data FROM records WHERE collection='audit' AND json_extract(data,'$.action')='certificate_access_requested' ORDER BY rowid").all()).results).map(row=>JSON.parse(row.data));
+  assert.equal((await f.call(`/files/${file.id}`)).status,401);
+  assert.equal((await f.call(`/files/${file.id}`,{cookie:await f.select('m2')})).status,403);
+  assert.equal((await readAudits()).length,0,'denied requests are not represented as accepted');
+  const preview=await f.call(`/files/${file.id}`,{cookie});
+  assert.equal(preview.status,200);
+  assert.deepEqual(Buffer.from(await preview.arrayBuffer()),PNG);
+  const download=await f.call(`/files/${file.id}?download=1&actorRole=admin&requestId=client-forged`,{cookie});
+  assert.equal(download.status,200);
+  assert.deepEqual(Buffer.from(await download.arrayBuffer()),PNG);
+  const adminDownload=await f.call(`/files/${file.id}?download=1`,{cookie:admin});
+  assert.equal(adminDownload.status,200);
+  assert.deepEqual(Buffer.from(await adminDownload.arrayBuffer()),PNG);
+  const entries=await readAudits();
+  assert.equal(entries.length,3);
+  assert.deepEqual(entries.map(entry=>entry.actor),['m1','m1','admin']);
+  assert.deepEqual(entries.map(entry=>entry.detail.accessMode),['preview','download','download']);
+  assert.deepEqual(entries.map(entry=>entry.detail.actorRole),['member','member','admin']);
+  assert.deepEqual(entries.map(entry=>entry.detail.identityAssurance),['name_selection_unverified','name_selection_unverified','shared_admin_password']);
+  assert.equal(new Set(entries.map(entry=>entry.detail.requestId)).size,3);
+  for(const entry of entries) {
+    assert.deepEqual(Object.keys(entry.detail).sort(),['fileId','courseId','memberId','submissionId','actorRole','identityAssurance','accessMode','requestAcceptedAt','requestId'].sort());
+    assert.equal(entry.detail.fileId,file.id);assert.equal(entry.detail.courseId,'c1');
+    assert.equal(entry.detail.memberId,'m1');assert.equal(entry.detail.submissionId,submission.id);
+    assert.match(entry.detail.requestId,/^[a-f0-9-]{36}$/);
+    assert.ok(Number.isFinite(Date.parse(entry.detail.requestAcceptedAt)));
+  }
+  const serialized=JSON.stringify(entries);
+  for(const excluded of [originalName,'1990-01-02','test-admin-password',cookie,admin,PNG.toString('base64'),'client-forged']) assert.equal(serialized.includes(excluded),false,excluded);
+  const dashboard=await (await f.call('/admin/data',{cookie:admin})).json();
+  assert.equal(dashboard.audit.filter(entry=>entry.action==='certificate_access_requested').length,3);
+});
+
+test('individual file delivery fails closed and cancels its opened stream when access auditing fails',async t=>{
+  const f=await fixture(t),cookie=await f.select();
+  const submitted=await f.call('/submissions',{method:'POST',cookie,body:f.form({file:PNG,name:'가상원본.png',type:'image/png'})});
+  assert.equal(submitted.status,201);
+  const file=(await submitted.json()).submission.files[0];
+  await f.env.DB.exec("CREATE TRIGGER reject_access_audit BEFORE INSERT ON records WHEN NEW.collection='audit' AND json_extract(NEW.data,'$.action')='certificate_access_requested' BEGIN SELECT RAISE(ABORT,'synthetic audit unavailable'); END;");
+  let cancelled=0;
+  f.env.FILES.get=async()=>({size:PNG.length,body:new ReadableStream({cancel(){cancelled++;return Promise.reject(new Error('synthetic cancellation failure'));}})});
+  const response=await f.call(`/files/${file.id}`,{cookie});
+  assert.equal(response.status,503);assert.equal((await response.json()).code,'FILE_ACCESS_AUDIT_FAILED');
+  assert.equal(cancelled,1,'best-effort cancellation does not mask the audit error or send the file');
+  assert.equal((await f.env.DB.prepare("SELECT COUNT(*) AS count FROM records WHERE collection='audit' AND json_extract(data,'$.action')='certificate_access_requested'").first()).count,0);
+  assert.equal((await f.env.DB.prepare("SELECT COUNT(*) AS count FROM records WHERE collection='files'").first()).count,1);
+});
+
+test('ZIP records every included file under one request before transfer and preserves the legacy summary',async t=>{
+  const f=await fixture(t),cookie=await f.select(),admin=await f.login();
+  const body=f.form({file:PNG,name:'가상직원_1990-01-02_첫번째.png',type:'image/png'});
+  body.append('files',new File([PNG],'가상직원_1990-01-02_두번째.png',{type:'image/png'}));
+  const submitted=await f.call('/submissions',{method:'POST',cookie,body});
+  assert.equal(submitted.status,201);
+  const submission=(await submitted.json()).submission;
+  const response=await f.call('/admin/courses/c1/download?scope=latest',{cookie:admin});
+  assert.equal(response.status,200);
+  const records=((await f.env.DB.prepare("SELECT data FROM records WHERE collection='audit'").all()).results).map(row=>JSON.parse(row.data));
+  const accesses=records.filter(entry=>entry.action==='certificate_access_requested');
+  const summaries=records.filter(entry=>entry.action==='certificates_downloaded');
+  assert.equal(accesses.length,2);assert.equal(summaries.length,1);
+  const summary=summaries[0];
+  assert.equal(summary.detail.courseId,'c1');assert.equal(summary.detail.scope,'latest');
+  assert.equal(summary.detail.fileCount,2);assert.equal(summary.detail.totalBytes,2*PNG.length);
+  assert.deepEqual(new Set(accesses.map(entry=>entry.detail.fileId)),new Set(submission.files.map(file=>file.id)));
+  for(const entry of accesses) {
+    assert.equal(entry.actor,'admin');assert.equal(entry.detail.actorRole,'admin');
+    assert.equal(entry.detail.identityAssurance,'shared_admin_password');assert.equal(entry.detail.accessMode,'zip');
+    assert.equal(entry.detail.memberId,'m1');assert.equal(entry.detail.submissionId,submission.id);
+    assert.equal(entry.detail.requestId,summary.detail.requestId);assert.equal(entry.detail.requestAcceptedAt,summary.detail.requestAcceptedAt);
+  }
+  assert.equal(JSON.stringify([...accesses,summary]).includes('1990-01-02'),false);
+  await response.body.cancel();
+  const count=await f.env.DB.prepare("SELECT COUNT(*) AS count FROM records WHERE collection='audit' AND json_extract(data,'$.action')='certificate_access_requested'").first();
+  assert.equal(count.count,2,'request acceptance remains recorded even if the recipient cancels the transfer');
+});
+
+test('a ZIP audit failure rolls back per-file records and blocks opening the ZIP file streams',async t=>{
+  const f=await fixture(t),cookie=await f.select(),admin=await f.login();
+  const body=f.form({file:PNG,name:'가상첫파일.png',type:'image/png'});
+  body.append('files',new File([PNG],'가상둘째파일.png',{type:'image/png'}));
+  assert.equal((await f.call('/submissions',{method:'POST',cookie,body})).status,201);
+  await f.env.DB.exec("CREATE TRIGGER reject_zip_summary BEFORE INSERT ON records WHEN NEW.collection='audit' AND json_extract(NEW.data,'$.action')='certificates_downloaded' BEGIN SELECT RAISE(ABORT,'synthetic summary unavailable'); END;");
+  let opened=0;
+  const get=f.env.FILES.get.bind(f.env.FILES);
+  f.env.FILES.get=async(...args)=>{opened++;return get(...args);};
+  const response=await f.call('/admin/courses/c1/download?scope=latest',{cookie:admin});
+  assert.equal(response.status,503);assert.equal((await response.json()).code,'FILE_ACCESS_AUDIT_FAILED');
+  assert.equal(opened,0);
+  const recorded=await f.env.DB.prepare("SELECT COUNT(*) AS count FROM records WHERE collection='audit' AND json_extract(data,'$.action') IN ('certificate_access_requested','certificates_downloaded')").first();
+  assert.equal(recorded.count,0,'all requested files and their summary are one atomic audit write');
+  assert.equal((await f.env.DB.prepare("SELECT COUNT(*) AS count FROM records WHERE collection='files'").first()).count,2);
+});
+
+test('file access history requires an administrator and validates its file, cursor and bounded page size',async t=>{
+  const f=await fixture(t),admin=await f.login(),selected=await f.select();
+  assert.equal((await f.call('/admin/file-access')).status,401);
+  assert.equal((await f.call('/admin/file-access',{cookie:selected})).status,401);
+  for(const query of ['limit=0','limit=101','limit=-1','limit=1.5','limit=abc','limit=','fileId=..%2Fother','cursor=not!base64']) {
+    assert.equal((await f.call(`/admin/file-access?${query}`,{cookie:admin})).status,400,query);
+  }
+  for(const value of [[],{createdAt:'invalid',id:'entry'},{createdAt:'2026-02-30T00:00:00.000Z',id:'entry'},{createdAt:timestamp,id:'../entry'}]) {
+    const cursor=Buffer.from(JSON.stringify(value)).toString('base64url');
+    assert.equal((await f.call(`/admin/file-access?cursor=${cursor}`,{cookie:admin})).status,400);
+  }
+  const empty=await (await f.call('/admin/file-access?fileId=unknown',{cookie:admin})).json();
+  assert.deepEqual(empty.entries,[]);assert.equal(empty.nextCursor,null);
+  assert.ok(Number.isFinite(Date.parse(empty.serverTime)));
+});
+
+test('dedicated file access history finds old files beyond the dashboard limit and defaults to 50 with a maximum of 100',async t=>{
+  const f=await fixture(t),admin=await f.login(),statements=[];
+  for(let index=0;index<120;index++) {
+    const entry={id:`access-${String(index).padStart(3,'0')}`,action:'certificate_access_requested',actor:'admin',createdAt:new Date(Date.UTC(2020,0,1,0,0,index)).toISOString(),version:1,detail:{fileId:index===0?'file-oldest':'file-other',actorRole:'admin',identityAssurance:'shared_admin_password',accessMode:'preview',requestId:`request-${index}`,requestAcceptedAt:timestamp}};
+    statements.push(f.env.DB.prepare("INSERT INTO records(collection,id,data,version) VALUES('audit',?,?,1)").bind(entry.id,JSON.stringify(entry)));
+  }
+  for(let index=0;index<500;index++) {
+    const entry={id:`newer-${String(index).padStart(3,'0')}`,action:'course_updated',actor:'admin',createdAt:timestamp,version:1,detail:{courseId:'c1'}};
+    statements.push(f.env.DB.prepare("INSERT INTO records(collection,id,data,version) VALUES('audit',?,?,1)").bind(entry.id,JSON.stringify(entry)));
+  }
+  await f.env.DB.batch(statements);
+  const dashboard=await (await f.call('/admin/data',{cookie:admin})).json();
+  assert.equal(dashboard.audit.length,500);assert.equal(dashboard.audit.some(entry=>entry.action==='certificate_access_requested'),false);
+  const first=await (await f.call('/admin/file-access',{cookie:admin})).json();
+  assert.equal(first.entries.length,50);assert.equal(first.entries[0].id,'access-119');assert.ok(first.nextCursor);
+  const large=await (await f.call('/admin/file-access?limit=100',{cookie:admin})).json();
+  assert.equal(large.entries.length,100);assert.ok(large.nextCursor);
+  const filtered=await (await f.call('/admin/file-access?fileId=file-oldest',{cookie:admin})).json();
+  assert.deepEqual(filtered.entries.map(entry=>entry.id),['access-000']);assert.equal(filtered.nextCursor,null);
+});
+
+test('file access keyset paging keeps equal timestamps ordered and avoids duplicates when a newer request arrives',async t=>{
+  const f=await fixture(t),admin=await f.login();
+  const add=async(id,createdAt=timestamp,fileId='paged-file')=>{
+    const entry={id,action:'certificate_access_requested',actor:'admin',createdAt,version:1,detail:{fileId,accessMode:'download',actorRole:'admin',identityAssurance:'shared_admin_password',requestId:`request-${id}`,requestAcceptedAt:createdAt}};
+    await f.env.DB.prepare("INSERT INTO records(collection,id,data,version) VALUES('audit',?,?,1)").bind(id,JSON.stringify(entry)).run();
+  };
+  for(let index=0;index<9;index++) await add(`tied-${index}`);
+  await add('older-1','2025-12-31T23:59:59.000Z');await add('older-2','2025-12-31T23:59:59.000Z');
+  await add('unrelated-newest','2026-12-31T00:00:00.000Z','another-file');
+  const collected=[],cursors=new Set();let cursor=null,pages=0;
+  do {
+    const query=new URLSearchParams({fileId:'paged-file',limit:'3'});
+    if(cursor)query.set('cursor',cursor);
+    const response=await f.call(`/admin/file-access?${query}`,{cookie:admin});
+    assert.equal(response.status,200);
+    const page=await response.json();
+    collected.push(...page.entries.map(entry=>entry.id));
+    assert.ok(page.entries.every(entry=>entry.detail.fileId==='paged-file'));
+    cursor=page.nextCursor;
+    if(cursor) {assert.equal(cursors.has(cursor),false);cursors.add(cursor);}
+    if(++pages===1)await add('arrived-after-first-page','2026-01-02T00:00:00.000Z');
+    assert.ok(pages<10);
+  } while(cursor);
+  assert.deepEqual(collected,['tied-8','tied-7','tied-6','tied-5','tied-4','tied-3','tied-2','tied-1','tied-0','older-2','older-1']);
+  assert.equal(new Set(collected).size,collected.length);
+  const refreshed=await (await f.call('/admin/file-access?fileId=paged-file',{cookie:admin})).json();
+  assert.equal(refreshed.entries[0].id,'arrived-after-first-page');
+});
+
 test('signature spoofing, wrong extension, empty files and cross-tab identity changes are rejected',async t=>{
   const f=await fixture(t);
   const cookie=await f.select();

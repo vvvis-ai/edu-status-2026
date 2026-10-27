@@ -28,6 +28,7 @@ let departmentChartVersion = 0;
 let departmentActiveIds = [];
 let departmentChartBusy = false;
 let loading = false;
+let fileAccess = {entries:[],nextCursor:null,fileId:'',loaded:false,loading:false,error:''};
 
 function setError(element, message) { element.textContent = message || ''; element.hidden = !message; }
 function busy(button, active, label) {
@@ -73,6 +74,7 @@ async function loadData({toast = false} = {}) {
     }
     data = response;
     updateYearOptions(); render();
+    if (currentTab === 'audit' && $('#auditTypeFilter').value === 'files') void loadFileAccess();
     $('#updatedAt').textContent = `마지막 확인: ${formatTime(response.serverTime || new Date().toISOString())}`;
     $('#loadingState').hidden = true;
     $('#adminContent').hidden = false;
@@ -302,7 +304,78 @@ function renderStatus() {
   $('#statusEmpty').hidden = courses.length > 0 && members.length > 0;
   $('#exportExcelButton').disabled = !courses.length || !members.length;
 }
-function render() { renderStats(); renderReview(); renderCourses(); renderMembers(); renderStatus(); }
+const auditActions = {
+  certificate_access_requested:'파일 접근 요청 접수', certificates_downloaded:'ZIP 요청 집계',
+  certificate_submitted:'수료증 제출', submission_reviewed:'수료증 검토',
+  course_created:'교육 등록', course_updated:'교육 수정', member_created:'부서원 등록', member_updated:'부서원 수정',
+  member_order_updated:'이름 순서 변경', department_chart_updated:'조직도 변경',
+  completion_override:'이수 상태 수동 처리', legacy_imported:'기존 기록 병합',
+};
+
+function auditActor(entry) {
+  const detail = entry.detail || {};
+  const role = detail.actorRole || (entry.actor === 'admin' ? 'admin' : 'member');
+  if (role === 'admin') return {label:'관리자 공용',assurance:detail.identityAssurance === 'shared_admin_password' ? '공용 비밀번호 · 개인 식별 불가' : '관리자 작업 · 개인 식별 불가'};
+  const selected = data.members.find(member => member.id === entry.actor);
+  return {label:selected ? `${selected.name} 이름 선택` : '이름 선택 사용자',assurance:'본인 미확인'};
+}
+
+function renderAudit() {
+  const filesOnly = $('#auditTypeFilter').value === 'files';
+  const source = filesOnly ? fileAccess.entries : data.audit;
+  const rows = source.filter(entry => {
+    const detail = entry.detail || {};
+    const owner = data.members.find(member => member.id === detail.memberId);
+    return includesQuery(auditActions[entry.action],courseName(detail.courseId),owner?.name,auditActor(entry).label,detail.fileId,detail.requestId);
+  }).sort((left,right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')) || String(right.id).localeCompare(String(left.id)));
+  $('#fileAccessFilterForm').hidden = !filesOnly;
+  $('#fileAccessQueryButton').disabled = fileAccess.loading;
+  setError($('#fileAccessError'),filesOnly ? fileAccess.error : '');
+  $('#auditScope').textContent = filesOnly
+    ? fileAccess.loading ? '파일 요청 기록을 불러오고 있습니다…' : `파일 요청 ${fileAccess.entries.length}건 불러옴 · 현재 검색 결과 ${rows.length}건. ‘더 보기’로 이전 기록을 계속 조회할 수 있습니다.`
+    : `전체 감사 기록 중 최근 최대 500건에서 ${rows.length}건을 표시합니다. 이전 파일 요청은 ‘파일 열람·다운로드 요청’에서 조회하세요.`;
+  $('#auditTableBody').innerHTML = rows.map(entry => {
+    const detail = entry.detail || {};
+    const owner = data.members.find(member => member.id === detail.memberId);
+    const actor = auditActor(entry);
+    const isFile = entry.action === 'certificate_access_requested';
+    const mode = {preview:'미리보기',download:'개별 내려받기',zip:'ZIP 포함 파일'}[detail.accessMode];
+    const operation = auditActions[entry.action] || '기타 관리 작업';
+    const target = detail.courseId ? courseName(detail.courseId) : '해당 교육 없음';
+    return `<tr><td>${e(formatTime(detail.requestAcceptedAt || entry.createdAt))}<span class="subline">${isFile || entry.action === 'certificates_downloaded' ? '요청 접수 시각' : '작업 기록 시각'}</span></td><td><strong>${e(operation)}</strong>${isFile ? `<span class="subline">${e(mode || '방식 미기록')} · 완료 여부 미확인</span>` : entry.action === 'certificates_downloaded' ? `<span class="subline">${Number.isSafeInteger(detail.fileCount) ? detail.fileCount : '—'}개 파일 · 완료 여부 미확인</span>` : ''}</td><td><strong>${e(target)}</strong><span class="subline">${owner ? `파일 소유자: ${e(owner.name)}` : '파일 소유자 해당 없음'}</span></td><td><strong>${e(actor.label)}</strong><span class="subline">${e(actor.assurance)}</span></td><td class="audit-identifiers">${detail.fileId ? `<strong>파일 ID</strong><span>${e(detail.fileId)}</span>` : '<span class="muted">개별 파일 ID 없음</span>'}${detail.requestId ? `<span class="subline">요청 ID: ${e(detail.requestId)}</span>` : ''}</td></tr>`;
+  }).join('');
+  $('#auditEmpty').hidden = rows.length > 0 || (filesOnly && (fileAccess.loading || Boolean(fileAccess.error)));
+  $('#auditEmpty').textContent = filesOnly ? '조회 조건에 해당하는 파일 요청 기록이 없습니다. 기록 기능 도입 전의 개별 열람은 남아 있지 않습니다.' : '조회 조건에 해당하는 감사 기록이 없습니다.';
+  $('#fileAccessMoreButton').hidden = !filesOnly || !fileAccess.nextCursor;
+  $('#fileAccessMoreButton').disabled = fileAccess.loading;
+  $('#fileAccessMoreButton').textContent = fileAccess.loading ? '기록을 불러오는 중…' : '이전 파일 요청 더 보기';
+}
+
+function resetFileAccess() { fileAccess = {entries:[],nextCursor:null,fileId:'',loaded:false,loading:false,error:''}; }
+
+async function loadFileAccess({more = false} = {}) {
+  if (more && (fileAccess.loading || !fileAccess.nextCursor)) return;
+  if (!more) { resetFileAccess(); fileAccess.fileId = $('#fileAccessId').value.trim(); }
+  const state = fileAccess;
+  state.loading = true; state.error = ''; renderAudit();
+  const query = new URLSearchParams({limit:'50'});
+  if (state.fileId) query.set('fileId',state.fileId);
+  if (more) query.set('cursor',state.nextCursor);
+  try {
+    const response = await api(`/admin/file-access?${query}`);
+    if (!Array.isArray(response.entries) || !(response.nextCursor == null || typeof response.nextCursor === 'string')) throw new Error('파일 요청 기록 응답을 확인할 수 없습니다.');
+    if (fileAccess !== state) return;
+    const ids = new Set(state.entries.map(entry => entry.id));
+    state.entries.push(...response.entries.filter(entry => !ids.has(entry.id)));
+    state.nextCursor = response.nextCursor; state.loaded = true;
+  } catch (error) {
+    if (fileAccess !== state) return;
+    state.error = `파일 요청 기록을 불러오지 못했습니다. ${error.message}`;
+    if (error.status === 401) showLogin();
+  } finally { if (fileAccess === state) { state.loading = false; renderAudit(); } }
+}
+
+function render() { renderStats(); renderReview(); renderCourses(); renderMembers(); renderStatus(); renderAudit(); }
 function switchTab(tab, focus = false) {
   currentTab = tab;
   $$('[data-tab]').forEach(button => {
@@ -310,7 +383,8 @@ function switchTab(tab, focus = false) {
     button.setAttribute('aria-selected', String(selected)); button.tabIndex = selected ? 0 : -1;
     if (selected && focus) button.focus();
   });
-  ['review', 'courses', 'members', 'status'].forEach(name => { $(`#view-${name}`).hidden = name !== tab; });
+  ['review', 'courses', 'members', 'status', 'audit'].forEach(name => { $(`#view-${name}`).hidden = name !== tab; });
+  if (tab === 'audit' && $('#auditTypeFilter').value === 'files' && !fileAccess.loaded && !fileAccess.loading) void loadFileAccess();
 }
 
 function checkboxes(name, selected = []) {
@@ -465,7 +539,7 @@ async function previewFile(id) {
   const controller = new AbortController(); previewController = controller;
   $$('.file-tab', $('#reviewDialog')).forEach(button => button.classList.toggle('active', button.dataset.previewFile === id));
   const preview = $('#filePreview'); preview.innerHTML = '<div class="empty-state" role="status">수료증 파일을 불러오고 있습니다.</div>';
-  $('#fileDownloadActions').innerHTML = `<button type="button" class="button secondary" data-file-download="${e(id)}">파일 내려받기</button>`;
+  $('#fileDownloadActions').innerHTML = `<button type="button" class="button secondary" data-file-download="${e(id)}">파일 내려받기</button><button type="button" class="button secondary" data-file-access="${e(id)}">이 파일의 요청 기록</button>`;
   try {
     const response = await fetchStoredFile(filePath(id), {signal: controller.signal, onRetry: () => {
       if (previewController === controller && $('#reviewDialog').open) preview.innerHTML = '<div class="empty-state" role="status">파일을 저장소에 반영 중입니다. 잠시 후 다시 확인합니다.</div>';
@@ -556,12 +630,18 @@ $('#loginForm').addEventListener('submit', async event => {
   finally { busy($('#loginButton'), false); }
 });
 $('#logoutButton').addEventListener('click', async () => {
-  try { await api('/admin/logout', {method: 'POST'}); $$('dialog[open]').forEach(closeDialog); data = {courses: [], members: [], submissions: [], overrides: [], audit: []}; showLogin(); }
+  try { await api('/admin/logout', {method: 'POST'}); $$('dialog[open]').forEach(closeDialog); data = {courses: [], members: [], submissions: [], overrides: [], audit: []}; resetFileAccess(); showLogin(); }
   catch (error) { showToast(error.message, 'error'); }
 });
 $('#refreshButton').addEventListener('click', () => { void loadData({toast: true}).catch(() => {}); });
 for (const id of ['yearFilter', 'periodFilter', 'reviewStatusFilter', 'courseVisibilityFilter', 'memberActiveFilter']) $(`#${id}`).addEventListener('change', render);
 $('#adminSearch').addEventListener('input', render);
+$('#auditTypeFilter').addEventListener('change', () => {
+  resetFileAccess(); renderAudit();
+  if ($('#auditTypeFilter').value === 'files') void loadFileAccess();
+});
+$('#fileAccessFilterForm').addEventListener('submit', event => { event.preventDefault(); void loadFileAccess(); });
+$('#fileAccessMoreButton').addEventListener('click', () => { void loadFileAccess({more:true}); });
 $('#newCourseButton').addEventListener('click', () => openCourse());
 $('#newMemberButton').addEventListener('click', () => openMember());
 $('#editMemberOrderButton').addEventListener('click', openMemberOrder);
@@ -648,6 +728,12 @@ document.addEventListener('click', async event => {
   if (button.dataset.recordMember) openRecord(button.dataset.recordMember, button.dataset.recordCourse);
   if (button.dataset.review) { if ($('#recordDialog').open) closeDialog($('#recordDialog')); openReview(button.dataset.review); }
   if (button.dataset.previewFile) previewFile(button.dataset.previewFile);
+  if (button.dataset.fileAccess) {
+    closeDialog($('#reviewDialog'));
+    $('#auditTypeFilter').value = 'files';
+    $('#fileAccessId').value = button.dataset.fileAccess;
+    resetFileAccess(); switchTab('audit', true);
+  }
   if (button.dataset.fileDownload) {
     const file = data.submissions.find(item => item.id === reviewSubmissionId)?.files.find(item => item.id === button.dataset.fileDownload);
     if (file) { busy(button, true, '내려받는 중…'); try { await downloadFile(`/files/${encodeURIComponent(file.id)}?download=1`, file.name); } catch (error) { showToast(error.message, 'error'); } finally { busy(button, false); } }
@@ -655,7 +741,7 @@ document.addEventListener('click', async event => {
 });
 $('.admin-tabs').addEventListener('keydown', event => {
   if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-  event.preventDefault(); const tabs = ['review', 'courses', 'members', 'status'], current = tabs.indexOf(currentTab);
+  event.preventDefault(); const tabs = ['review', 'courses', 'members', 'status', 'audit'], current = tabs.indexOf(currentTab);
   const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
   switchTab(tabs[next], true);
 });

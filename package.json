@@ -13,7 +13,7 @@
     "cf:schema:local": "wrangler d1 execute DB --local --file server/schema.sql",
     "seed:sql": "node scripts/prepare-edu-sql.mjs",
     "deploy:dry-run": "npm run build && wrangler deploy --dry-run --outdir .verification/worker-dry-run",
-    "deploy": "npm run build && wrangler deploy --secrets-file .dev.vars",
+    "deploy": "npm run build && node scripts/prepare-edu-secrets.mjs && wrangler deploy --secrets-file .dev.vars.production.json",
     "build:pdf": "node scripts/build-pdf-engine.mjs",
     "convert": "node 수료증_엑셀일괄변환.mjs"
   },
