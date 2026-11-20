@@ -445,6 +445,66 @@ async function saveMember(request, env, id) {
   return json({member},existing ? 200 : 201);
 }
 
+async function saveCourseExemptions(request, env, memberId) {
+  const body = await readJson(request);
+  const member = await required(env,'members',memberId);
+  if (version(body.memberVersion) !== member.version) conflict();
+  if (!Array.isArray(body.changes) || !body.changes.length) fail(400,'변경할 교육을 선택해 주세요.');
+  const seen = new Set();
+  const requested = body.changes.map(change => {
+    if (!change || typeof change.exempt !== 'boolean') fail(400,'교육 면제 설정을 확인해 주세요.');
+    const courseId = cleanId(change.courseId);
+    if (seen.has(courseId)) fail(400,'중복된 교육이 포함되어 있습니다.');
+    seen.add(courseId);
+    const submissionVersion = version(change.submissionVersion,true);
+    const submissionId = submissionVersion ? cleanId(change.submissionId) : '';
+    if (change.submissionId !== submissionId) fail(400,'수료증 기록을 확인해 주세요.');
+    return {courseId,exempt:change.exempt,version:version(change.version),submissionId,submissionVersion,overrideVersion:version(change.overrideVersion,true)};
+  });
+  const courses = new Map((await all(env,'courses')).map(course => [course.id,course]));
+  const pending = requested.filter(change => {
+    const course = courses.get(change.courseId);
+    if (course?.version !== change.version) conflict();
+    const exemptIds = (course.exemptMemberIds || []).map(String);
+    return exemptIds.includes(member.id) !== change.exempt;
+  });
+  if (!pending.length) return json({updated:0});
+  const audit = auditItem('course_exemptions_updated', {memberId,changes:pending.map(({courseId,exempt})=>({courseId,exempt}))});
+  const payload = stringify(pending);
+
+  // The audit row authorizes the update only if all entries still match the review screen.
+  // One D1 batch commits the audit and the corresponding education settings together.
+  const [confirmed] = await env.DB.batch([
+    env.DB.prepare(`INSERT INTO records(collection,id,data,version) SELECT 'audit',?,?,?
+      WHERE EXISTS (SELECT 1 FROM records WHERE collection = 'members' AND id = ? AND version = ?)
+      AND NOT EXISTS (
+        SELECT 1 FROM json_each(?) AS item
+        LEFT JOIN records AS course ON course.collection = 'courses' AND course.id = json_extract(item.value,'$.courseId')
+        LEFT JOIN records AS manual ON manual.collection = 'overrides' AND manual.id = ? || ':' || course.id
+        LEFT JOIN records AS latest ON latest.collection = 'submissions' AND latest.id = (
+          SELECT s.id FROM records AS s WHERE s.collection = 'submissions'
+          AND json_extract(s.data,'$.memberId') = ? AND json_extract(s.data,'$.courseId') = course.id
+          ORDER BY COALESCE(json_extract(s.data,'$.revision'),0) DESC, json_extract(s.data,'$.submittedAt') DESC, s.id DESC LIMIT 1
+        )
+        WHERE course.version IS NULL OR course.version <> json_extract(item.value,'$.version')
+          OR COALESCE(manual.version,0) <> json_extract(item.value,'$.overrideVersion')
+          OR COALESCE(latest.id,'') <> json_extract(item.value,'$.submissionId')
+          OR COALESCE(latest.version,0) <> json_extract(item.value,'$.submissionVersion')
+      )`).bind(audit.id,stringify(audit),audit.version,memberId,member.version,payload,memberId,memberId),
+    env.DB.prepare(`UPDATE records AS course SET
+      data = json_set(course.data,'$.exemptMemberIds',json(CASE WHEN json_extract(item.value,'$.exempt') = 1
+        THEN json_insert(COALESCE(json_extract(course.data,'$.exemptMemberIds'),'[]'),'$[#]',?)
+        ELSE (SELECT json_group_array(value) FROM json_each(course.data,'$.exemptMemberIds') WHERE CAST(value AS TEXT) <> ?)
+        END),'$.updatedAt',?,'$.version',course.version + 1),
+      version = course.version + 1
+      FROM json_each(?) AS item
+      WHERE course.collection = 'courses' AND course.id = json_extract(item.value,'$.courseId')
+      AND EXISTS (SELECT 1 FROM records WHERE collection = 'audit' AND id = ?)`).bind(memberId,memberId,audit.createdAt,payload,audit.id),
+  ]);
+  if (!changes(confirmed)) conflict();
+  return json({updated:pending.length});
+}
+
 async function identifyFile(file) {
   const bytes = new Uint8Array(await file.slice(0,16).arrayBuffer());
   const starts = values => values.every((value,index) => bytes[index] === value);
@@ -761,6 +821,8 @@ async function route(request, env) {
     match = /^\/api\/admin\/courses\/([\w:-]+)$/.exec(path);
     if (match && request.method==='PUT') return saveCourse(request,env,match[1]);
     if (path==='/api/admin/members' && request.method==='POST') return saveMember(request,env);
+    match = /^\/api\/admin\/members\/([\w:-]+)\/course-exemptions$/.exec(path);
+    if (match && request.method==='PUT') return saveCourseExemptions(request,env,match[1]);
     match = /^\/api\/admin\/members\/([\w:-]+)\/history$/.exec(path);
     if (match && request.method==='GET') {
       const member = await required(env,'members',match[1]);

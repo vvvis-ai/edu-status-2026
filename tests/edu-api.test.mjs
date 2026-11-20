@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {handleApi} from '../server/api.mjs';
 import {createLocalEnvironment} from '../server/local-storage.mjs';
+import {getProgress, getStatus} from '../edu-shared.mjs';
 
 const PDF = new TextEncoder().encode('%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n');
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nGkAAAAASUVORK5CYII=','base64');
@@ -125,6 +126,64 @@ test('administrator certificate import approves originals, preserves earlier rec
   assert.equal(data.submissions.find(item => item.id === pending.id).status,'pending');
   assert.equal(data.audit.filter(item => item.action === 'certificate_imported' && item.actor === 'admin').length,2);
   assert.equal((await f.call('/admin/courses/c1/download',{cookie:admin})).status,200);
+});
+
+const exemptionChange = (courseId, exempt, extra={}) => ({courseId,exempt,version:1,submissionId:'',submissionVersion:0,overrideVersion:0,...extra});
+
+test('bulk course exemptions update a single member across courses and keep existing certificate and completion records', async t => {
+  const f = await fixture(t,{courses:[course('c1',{exemptMemberIds:['m2']}),course('c2',{exemptMemberIds:['m1','m2']}),course('c3')],members:[member('m1',{legacyCompletions:['c3']}),member('m2')]});
+  const admin = await f.login(), selected = await f.select();
+  const uploaded = await f.call('/submissions',{method:'POST',cookie:selected,body:f.form()});
+  assert.equal(uploaded.status,201);
+  const {submission} = await uploaded.json();
+  const before = await (await f.call('/admin/data',{cookie:admin})).json();
+  const body = {memberVersion:1,changes:[exemptionChange('c1',true,{submissionId:submission.id,submissionVersion:1}),exemptionChange('c2',false)]};
+  const route = '/admin/members/m1/course-exemptions';
+  assert.equal((await f.call(route,{method:'PUT',cookie:selected,body})).status,401);
+  assert.equal((await f.call(route,{method:'PUT',cookie:admin,body,origin:'https://example.org'})).status,403);
+  const response = await f.call(route,{method:'PUT',cookie:admin,body});
+  assert.equal(response.status,200,await response.clone().text());
+  assert.deepEqual(await response.json(),{updated:2});
+  const after = await (await f.call('/admin/data',{cookie:admin})).json();
+  assert.deepEqual(after.courses.map(({exemptMemberIds,version})=>[exemptMemberIds,version]),[[['m2','m1'],2],[['m2'],2],[[],1]]);
+  assert.deepEqual(after.members,before.members);
+  assert.deepEqual(after.submissions,before.submissions);
+  assert.deepEqual(after.overrides,before.overrides);
+  assert.deepEqual(after.audit.find(entry=>entry.action==='course_exemptions_updated').detail,{memberId:'m1',changes:[{courseId:'c1',exempt:true},{courseId:'c2',exempt:false}]});
+  const mine = await (await f.call('/me',{cookie:selected})).json();
+  assert.deepEqual(mine.courses.map(item=>getStatus(item,mine.member,mine.submissions,mine.overrides)),['exempt','not_submitted','approved']);
+  assert.equal(getProgress(mine.courses,mine.member,mine.submissions,mine.overrides).total,2);
+  assert.equal((await f.call('/submissions',{method:'POST',cookie:selected,body:f.form()})).status,403);
+  assert.deepEqual(new Uint8Array(await (await f.call(`/files/${submission.files[0].id}`,{cookie:selected})).arrayBuffer()),PDF);
+  assert.equal((await f.call('/submissions',{method:'POST',cookie:selected,body:f.form({courseId:'c2'})})).status,201);
+});
+
+test('bulk course exemptions reject stale submissions and concurrent course changes as a whole', async t => {
+  const f = await fixture(t,{courses:[course('c1'),course('c2')],members:[member('m1')]});
+  const admin = await f.login(), selected = await f.select();
+  const route = '/admin/members/m1/course-exemptions';
+  const save = changes => f.call(route,{method:'PUT',cookie:admin,body:{memberVersion:1,changes}});
+  const pending = [exemptionChange('c1',true),exemptionChange('c2',true)];
+  assert.equal((await save([pending[0],pending[0]])).status,400);
+  const {submission} = await (await f.call('/submissions',{method:'POST',cookie:selected,body:f.form({courseId:'c2'})})).json();
+  assert.equal((await save(pending)).status,409);
+  const refreshed = [pending[0],{...pending[1],submissionId:submission.id,submissionVersion:1}];
+  const batch = f.env.DB.batch.bind(f.env.DB);
+  f.env.DB.batch = async statements => {
+    f.env.DB.batch = batch;
+    await f.call('/admin/courses/c1',{method:'PUT',cookie:admin,body:{...course('c1'),name:'동시에 변경한 교육'}});
+    return batch(statements);
+  };
+  assert.equal((await save(refreshed)).status,409);
+  const after = await (await f.call('/admin/data',{cookie:admin})).json();
+  assert.deepEqual(after.courses.map(item=>item.exemptMemberIds),[[],[]]);
+  assert.equal(after.audit.filter(entry=>entry.action==='course_exemptions_updated').length,0);
+  const current = [{...refreshed[0],version:2},refreshed[1]];
+  const responses = await Promise.all([save(current),save(current)]);
+  assert.deepEqual(responses.map(response=>response.status).sort(),[200,409]);
+  const final = await (await f.call('/admin/data',{cookie:admin})).json();
+  assert.deepEqual(final.courses.map(item=>item.exemptMemberIds),[['m1'],['m1']]);
+  assert.equal(final.audit.filter(entry=>entry.action==='course_exemptions_updated').length,1);
 });
 
 test('member order defaults to existing ID order, persists for public/admin views and preserves education and personnel records',async t=>{

@@ -57,6 +57,29 @@
   <dialog id="reviewDialog" class="dialog admin-dialog review-dialog" aria-labelledby="reviewDialogTitle"><div class="dialog-head"><h2 id="reviewDialogTitle">수료증 검토</h2><button type="button" class="dialog-close" data-close="reviewDialog" aria-label="검토 창 닫기">×</button></div><div id="reviewDialogBody" class="dialog-body"></div></dialog>
   <dialog id="recordDialog" class="dialog admin-dialog" aria-labelledby="recordDialogTitle"><div class="dialog-head"><h2 id="recordDialogTitle">이수 기록</h2><button type="button" class="dialog-close" data-close="recordDialog" aria-label="이수 기록 닫기">×</button></div><div id="recordDialogBody" class="dialog-body"></div></dialog>
   <dialog id="downloadDialog" class="dialog admin-dialog" aria-labelledby="downloadDialogTitle"><form id="downloadForm"><div class="dialog-head"><h2 id="downloadDialogTitle">교육별 수료증 내려받기</h2><button type="button" class="dialog-close" data-close="downloadDialog" aria-label="다운로드 설정 닫기">×</button></div><div class="dialog-body"><p id="downloadCourseName"></p><div class="download-options"><label class="download-option"><input type="radio" name="downloadScope" value="approved" checked><span><strong>승인된 최신 제출본</strong><small>각 부서원의 최신 제출본 중 승인된 수료증을 묶습니다.</small></span></label><label class="download-option"><input type="radio" name="downloadScope" value="latest"><span><strong>전체 최신 제출본</strong><small>확인 중·보완 요청을 포함해 각 부서원의 최신 제출본을 상태별로 묶습니다.</small></span></label></div><p class="soft-note">ZIP 안에는 교육명·상태별 폴더와 ‘팀_이름_수료일’로 정리된 파일이 들어갑니다. 재제출 이전 파일과 첨부 없는 기존 수동 기록은 포함되지 않습니다.</p><p id="downloadError" class="field-error" role="alert" hidden></p></div><div class="dialog-footer"><button class="button secondary" type="button" data-close="downloadDialog">취소</button><button id="downloadZipButton" class="button primary" type="submit">ZIP 내려받기</button></div></form></dialog>
+  <dialog id="memberExemptionDialog" class="dialog admin-dialog member-exemption-dialog" aria-labelledby="memberExemptionTitle">
+    <form id="memberExemptionForm">
+      <div class="dialog-head"><h2 id="memberExemptionTitle">교육 면제 일괄 설정</h2><button type="button" class="dialog-close" data-close="memberExemptionDialog" aria-label="교육 면제 설정 닫기">×</button></div>
+      <div class="dialog-body">
+        <p id="memberExemptionMeta" class="muted"></p>
+        <div class="member-exemption-filters">
+          <div class="field"><label for="memberExemptionYear">교육 연도</label><select id="memberExemptionYear"></select></div>
+          <div class="field"><label for="memberExemptionQuarter">조회 분기</label><select id="memberExemptionQuarter"><option value="">연간 전체</option><option value="1">1분기</option><option value="2">2분기</option><option value="3">3분기</option><option value="4">4분기</option></select></div>
+        </div>
+        <p class="form-help">면제할 교육은 체크하고, 면제를 해제할 교육은 체크를 푸세요. 연도나 분기를 바꿔도 선택한 변경은 저장할 때까지 유지됩니다.</p>
+        <ul id="memberExemptionList" class="member-exemption-list" aria-label="교육별 면제 설정"></ul>
+        <p id="memberExemptionEmpty" class="empty-state" hidden>해당 기간의 교육이 없습니다.</p>
+        <p id="memberExemptionFeedback" class="form-help" role="status"></p>
+        <p id="memberExemptionError" class="field-error" role="alert" hidden></p>
+      </div>
+      <div class="dialog-footer member-exemption-footer">
+        <div class="member-exemption-summary" role="status"><strong id="memberExemptionCount"></strong><span id="memberExemptionWarning" hidden></span></div>
+        <button id="reloadMemberExemptionsButton" class="button ghost" type="button" hidden>최신 현황 불러오기</button>
+        <button class="button secondary" type="button" data-close="memberExemptionDialog">취소</button>
+        <button id="saveMemberExemptionsButton" class="button primary" type="submit" disabled>면제 설정 저장</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="departmentChartDialog" class="dialog admin-dialog department-dialog" aria-labelledby="departmentChartTitle"><form id="departmentChartForm">
     <div class="dialog-head"><h2 id="departmentChartTitle">부서 조직도 편집</h2><button type="button" class="dialog-close" data-close="departmentChartDialog" aria-label="조직도 편집 닫기">×</button></div>
     <div class="dialog-body"><p class="muted">맨 위에 표시할 과장님과 4개 팀의 이름을 정하고, 부서원을 각 팀에 배치하세요. 팀 안의 순서는 ‘이름 순서 편집’에서 바꿀 수 있습니다.</p>

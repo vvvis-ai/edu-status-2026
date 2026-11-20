@@ -26,6 +26,7 @@
 - GET /api/admin/data의 `memberOrder:{memberIds,version}`는 현재 재직자 전체의 표시 순서와 독립 버전(미설정 시 0). `members`와 공개 bootstrap 명단도 해당 순서로 반환.
 - PUT /api/admin/member-order `{memberIds:현재 재직자 전원 ID,version}` → `{memberOrder}`. 관리자 전용. 중복·없는 ID는400, 버전 또는 재직자 집합 변경은409. 별도 `settings/member-order` 레코드와 감사로그만 원자적으로 저장하며 부서원 버전·이수·제출 기록은 변경하지 않음. 저장 순서에 없는 신규 재직자는 끝에 표시.
 - GET /api/admin/members/:id/history → `{history,serverTime}`. 관리자 전용, 해당 부서원의 등록·인사 변경 감사 이력을 최신순으로 전량 조회. 대시보드의 최근 감사로그 500건 제한과 독립.
+- PUT /api/admin/members/:id/course-exemptions `{memberVersion,changes:[{courseId,exempt,version,submissionId,submissionVersion,overrideVersion}]}` → `{updated}`. 제출이 없으면 `submissionId:''`, 관련 기록이 없으면 해당 버전 0. 변경되는 모든 교육의 기존 면제 목록을 한 배치에서 수정하고 관리자 감사 기록을 추가. 부서원·교육·최신 제출·수동 처리의 버전 변경 시 409.
 - POST /api/admin/submissions/:id/review `{status:'approved'|'needs_revision',reviewNote,version}` → `{submission}`. 최신 제출만 검토.
 - POST /api/admin/certificate-import : 관리자 확인 뒤 부서원·교육 한 쌍씩 FormData로 제출. `memberId`, `courseId`, `memberVersion`, `courseVersion`, `expectedSubmission`(`id|version` 또는 빈 문자열), `completedOn`, 반복 `files`. 일반 제출과 동일한 형식·용량·원본 검증으로 `{submission}`(201, approved)과 `certificate_imported` 감사 기록을 저장. 승인된 기존 수료증이나 수동 처리 기록, 변경된 대상 정보·최신 제출은 거부. 브라우저가 여러 쌍의 결과를 각각 집계.
 - PUT /api/admin/overrides/:memberId/:courseId `{status:'approved'|'not_submitted'|'exempt'|'clear',reason,version:0또는현재값}` → `{override}`. 수동 처리는 사유 필수. 검토보다 override 우선. 새 제출/검토 시 override 제거해 새 결과 반영.

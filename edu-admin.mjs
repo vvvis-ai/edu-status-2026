@@ -15,6 +15,7 @@ let data = {courses: [], members: [], submissions: [], overrides: [], audit: []}
 let currentTab = 'review';
 let editingCourse = null;
 let editingMember = null;
+let memberExemptions = null;
 let downloadCourseId = null;
 let reviewSubmissionId = null;
 let previewController = null;
@@ -139,7 +140,7 @@ function renderCourses() {
 function renderMembers() {
   const active = $('#memberActiveFilter').value;
   const rows = data.members.filter(member => (active === 'all' || member.active === (active === 'active')) && includesQuery(member.name, member.team, member.position));
-  $('#memberTableBody').innerHTML = rows.map(member => `<tr><td><strong>${e(member.name)}</strong></td><td>${e(member.team || '—')}</td><td>${e(member.position || '—')}</td><td>${formatDate(member.joinedOn)}<span class="subline">전출 ${formatDate(member.leftOn)}</span></td><td><span class="badge ${member.active ? 'success' : 'muted'}">${member.active ? '재직' : '전출·비활성'}</span></td><td><button type="button" class="button secondary" data-member-edit="${e(member.id)}">수정</button></td></tr>`).join('');
+  $('#memberTableBody').innerHTML = rows.map(member => `<tr><td><strong>${e(member.name)}</strong></td><td>${e(member.team || '—')}</td><td>${e(member.position || '—')}</td><td>${formatDate(member.joinedOn)}<span class="subline">전출 ${formatDate(member.leftOn)}</span></td><td><span class="badge ${member.active ? 'success' : 'muted'}">${member.active ? '재직' : '전출·비활성'}</span></td><td><div class="actions-cell"><button type="button" class="button secondary" data-member-edit="${e(member.id)}">수정</button><button type="button" class="button ghost" data-member-exemptions="${e(member.id)}" aria-label="${e(member.name)} 교육 면제 일괄 설정">교육 면제 설정</button></div></td></tr>`).join('');
   $('#memberEmpty').hidden = rows.length > 0;
   $('#editMemberOrderButton').disabled = data.members.filter(member => member.active).length < 2;
 }
@@ -310,7 +311,7 @@ const auditActions = {
   certificate_submitted:'수료증 제출', certificate_imported:'수료증 일괄 등록', submission_reviewed:'수료증 검토',
   course_created:'교육 등록', course_updated:'교육 수정', member_created:'부서원 등록', member_updated:'부서원 수정',
   member_order_updated:'이름 순서 변경', department_chart_updated:'조직도 변경',
-  completion_override:'이수 상태 수동 처리', legacy_imported:'기존 기록 병합',
+  completion_override:'이수 상태 수동 처리', course_exemptions_updated:'교육 면제 일괄 설정', legacy_imported:'기존 기록 병합',
 };
 
 function auditActor(entry) {
@@ -327,7 +328,8 @@ function renderAudit() {
   const rows = source.filter(entry => {
     const detail = entry.detail || {};
     const owner = data.members.find(member => member.id === detail.memberId);
-    return includesQuery(auditActions[entry.action],courseName(detail.courseId),owner?.name,auditActor(entry).label,detail.fileId,detail.requestId);
+    const exemptions = entry.action === 'course_exemptions_updated' ? detail.changes || [] : [];
+    return includesQuery(auditActions[entry.action],courseName(detail.courseId),owner?.name,auditActor(entry).label,detail.fileId,detail.requestId,...exemptions.map(change => courseName(change.courseId)));
   }).sort((left,right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')) || String(right.id).localeCompare(String(left.id)));
   $('#fileAccessFilterForm').hidden = !filesOnly;
   $('#fileAccessQueryButton').disabled = fileAccess.loading;
@@ -342,6 +344,10 @@ function renderAudit() {
     const isFile = entry.action === 'certificate_access_requested';
     const mode = {preview:'미리보기',download:'개별 내려받기',zip:'ZIP 포함 파일'}[detail.accessMode];
     const operation = auditActions[entry.action] || '기타 관리 작업';
+    if (entry.action === 'course_exemptions_updated') {
+      const changes = detail.changes || [];
+      return `<tr><td>${e(formatTime(entry.createdAt))}</td><td><strong>${e(operation)}</strong><span class="subline">${changes.length}개 교육</span></td><td><strong>${e(owner?.name || '부서원 미상')}</strong>${changes.map(change => `<span class="subline">${e(courseName(change.courseId))} · ${change.exempt ? '면제 추가' : '면제 해제'}</span>`).join('')}</td><td><strong>${e(actor.label)}</strong><span class="subline">${e(actor.assurance)}</span></td><td>—</td></tr>`;
+    }
     const target = detail.courseId ? courseName(detail.courseId) : '해당 교육 없음';
     return `<tr><td>${e(formatTime(detail.requestAcceptedAt || entry.createdAt))}<span class="subline">${isFile || entry.action === 'certificates_downloaded' ? '요청 접수 시각' : '작업 기록 시각'}</span></td><td><strong>${e(operation)}</strong>${isFile ? `<span class="subline">${e(mode || '방식 미기록')} · 완료 여부 미확인</span>` : entry.action === 'certificates_downloaded' ? `<span class="subline">${Number.isSafeInteger(detail.fileCount) ? detail.fileCount : '—'}개 파일 · 완료 여부 미확인</span>` : ''}</td><td><strong>${e(target)}</strong><span class="subline">${owner ? `파일 소유자: ${e(owner.name)}` : '파일 소유자 해당 없음'}</span></td><td><strong>${e(actor.label)}</strong><span class="subline">${e(actor.assurance)}</span></td><td class="audit-identifiers">${detail.fileId ? `<strong>파일 ID</strong><span>${e(detail.fileId)}</span>` : '<span class="muted">개별 파일 ID 없음</span>'}${detail.requestId ? `<span class="subline">요청 ID: ${e(detail.requestId)}</span>` : ''}</td></tr>`;
   }).join('');
@@ -495,6 +501,125 @@ async function saveMember(event) {
     closeDialog($('#memberDialog')); await loadData(); showToast(editingMember ? '부서원 정보를 수정했습니다.' : '새 부서원을 등록했습니다.');
   } catch (error) { setError($('#memberError'), error.message); }
   finally { busy($('#saveMemberButton'), false); }
+}
+
+function memberExemptionSnapshot(memberId, draft = new Map()) {
+  const member = data.members.find(value => value.id === memberId);
+  if (!member) return null;
+  const submissions = data.submissions.filter(value => value.memberId === memberId);
+  const overrides = new Map(data.overrides.filter(value => value.memberId === memberId).map(value => [value.courseId, value]));
+  const legacy = new Set((member.legacyCompletions || []).map(String));
+  const entries = new Map(data.courses.map(course => [course.id, {
+    course, exempt:(course.exemptMemberIds || []).map(String).includes(memberId),
+    submission:getLatestSubmission(submissions, memberId, course.id), override:overrides.get(course.id), legacy:legacy.has(course.id),
+  }]));
+  const changes = new Map([...draft].filter(([id, exempt]) => entries.has(id) && entries.get(id).exempt !== exempt));
+  return {member, entries, changes, busy:false, stale:false};
+}
+
+function renderMemberExemptionFooter() {
+  const {entries, changes, busy:working, stale} = memberExemptions;
+  const added = [...changes.values()].filter(Boolean).length;
+  $('#memberExemptionCount').textContent = `면제 추가 ${added}건 · 면제 해제 ${changes.size - added}건`;
+  const records = [...changes.keys()].filter(id => {
+    const {submission, legacy, override} = entries.get(id);
+    return submission || legacy || override?.status === 'approved';
+  }).length;
+  const warning = $('#memberExemptionWarning');
+  warning.textContent = `변경 중 제출·이수 기록이 있는 교육 ${records}건을 확인해 주세요.`;
+  warning.hidden = !records;
+  $('#saveMemberExemptionsButton').disabled = working || stale || !changes.size;
+  $('#saveMemberExemptionsButton').textContent = working ? '처리 중…' : '면제 설정 저장';
+  $('#reloadMemberExemptionsButton').hidden = !stale;
+  $('#reloadMemberExemptionsButton').disabled = working;
+  for (const button of $$('[data-close="memberExemptionDialog"]')) button.disabled = working;
+}
+
+function renderMemberExemptions() {
+  const {member, entries, changes, busy:working} = memberExemptions;
+  const year = $('#memberExemptionYear');
+  const quarter = $('#memberExemptionQuarter');
+  year.disabled = quarter.disabled = working;
+  const filtered = [...entries.values()].filter(({course}) => matchesPeriod(course, {year:Number(year.value),quarter:Number(quarter.value)}))
+    .sort((a,b) => a.course.deadline.localeCompare(b.course.deadline) || a.course.name.localeCompare(b.course.name,'ko'));
+  $('#memberExemptionMeta').textContent = [member.team, member.position, `전입일 ${formatDate(member.joinedOn)}`].filter(Boolean).join(' · ');
+  $('#memberExemptionList').innerHTML = filtered.map(({course, exempt, submission, override, legacy}) => {
+    const status = getStatus(course, member, submission ? [submission] : [], override ? [override] : []);
+    const history = submission ? `수료증 기록 · ${statusLabel(submission.status)}` : legacy ? '기존 이수 기록' : '';
+    return `<li class="member-exemption-row"><div class="member-exemption-course"><strong>${e(course.name)}</strong><span class="subline">${e(periodLabel(course))} · 제출 ${formatDate(course.submissionDeadline || course.deadline)}</span><div class="row">${statusBadge(status)}${course.archived || !course.published ? visibilityBadge(course) : ''}</div>${history ? `<span class="subline">${e(history)}</span>` : ''}${override ? '<span class="subline">현재 상태에는 담당자 수동 처리가 우선 적용됩니다.</span>' : ''}</div><label class="checkbox-line"><input type="checkbox" value="${e(course.id)}" aria-label="${e(course.name)} 면제" ${(changes.get(course.id) ?? exempt) ? 'checked' : ''} ${working ? 'disabled' : ''}> 면제</label></li>`;
+  }).join('');
+  $('#memberExemptionEmpty').hidden = filtered.length > 0;
+  renderMemberExemptionFooter();
+}
+
+function setMemberExemptionYears(selectedYear) {
+  const year = $('#memberExemptionYear');
+  year.innerHTML = $('#yearFilter').innerHTML;
+  year.value = selectedYear;
+  if (!year.value) year.value = $('#yearFilter').value;
+}
+
+function openMemberExemptions(memberId) {
+  memberExemptions = memberExemptionSnapshot(memberId);
+  if (!memberExemptions) return;
+  $('#memberExemptionTitle').textContent = `${memberExemptions.member.name} · 교육 면제 일괄 설정`;
+  setMemberExemptionYears($('#yearFilter').value);
+  const {quarter,month} = periodOptions();
+  $('#memberExemptionQuarter').value = String(quarter || (month ? Math.ceil(month / 3) : ''));
+  $('#memberExemptionFeedback').textContent = '';
+  setError($('#memberExemptionError'), '');
+  renderMemberExemptions(); openDialog($('#memberExemptionDialog'));
+}
+
+async function reloadMemberExemptions() {
+  const state = memberExemptions;
+  if (!state || state.busy) return;
+  state.busy = true;
+  setError($('#memberExemptionError'), '');
+  renderMemberExemptions();
+  try {
+    await loadData();
+    const latest = memberExemptionSnapshot(state.member.id, state.changes);
+    if (!latest) throw new Error('부서원 정보를 찾을 수 없습니다. 명단을 확인해 주세요.');
+    memberExemptions = latest;
+    $('#memberExemptionTitle').textContent = `${latest.member.name} · 교육 면제 일괄 설정`;
+    setMemberExemptionYears($('#memberExemptionYear').value);
+    $('#memberExemptionFeedback').textContent = '최신 현황을 불러왔습니다. 변경할 교육을 확인해 주세요.';
+  } catch(error) { setError($('#memberExemptionError'), error.message); }
+  finally {
+    if (memberExemptions && $('#memberExemptionDialog').open) {
+      memberExemptions.busy = false;
+      renderMemberExemptions();
+    }
+  }
+}
+
+async function saveMemberExemptions(event) {
+  event.preventDefault();
+  const state = memberExemptions;
+  if (!state || state.busy || state.stale || !state.changes.size) return;
+  const changes = [...state.changes].map(([courseId, exempt]) => {
+    const {course, submission, override} = state.entries.get(courseId);
+    return {courseId, exempt, version:course.version, submissionId:submission?.id || '', submissionVersion:submission?.version || 0, overrideVersion:override?.version || 0};
+  });
+  state.busy = true;
+  $('#memberExemptionFeedback').textContent = '';
+  setError($('#memberExemptionError'), '');
+  renderMemberExemptions();
+  try {
+    const result = await api(`/admin/members/${encodeURIComponent(state.member.id)}/course-exemptions`, {
+      method:'PUT',body:{memberVersion:state.member.version,changes},
+    });
+    closeDialog($('#memberExemptionDialog'));
+    showToast(`교육 ${result.updated}건의 면제 설정을 저장했습니다.`);
+    await loadData().catch(() => {});
+  } catch(error) {
+    state.stale = error.code === 'VERSION_CONFLICT' || !error.status;
+    setError($('#memberExemptionError'), state.stale ? '최신 현황을 불러온 뒤 변경할 교육을 확인해 주세요.' : error.message);
+  } finally {
+    state.busy = false;
+    if ($('#memberExemptionDialog').open && memberExemptions === state) renderMemberExemptions();
+  }
 }
 
 function submissionHistory(memberId, courseId, selectedId = null) {
@@ -712,6 +837,19 @@ $('#memberOrderList').addEventListener('dragend', () => {
 });
 $('#courseForm').addEventListener('submit', saveCourse);
 $('#memberForm').addEventListener('submit', saveMember);
+$('#memberExemptionForm').addEventListener('submit', saveMemberExemptions);
+$('#reloadMemberExemptionsButton').addEventListener('click', reloadMemberExemptions);
+for (const id of ['memberExemptionYear', 'memberExemptionQuarter']) $(`#${id}`).addEventListener('change', renderMemberExemptions);
+$('#memberExemptionList').addEventListener('change', event => {
+  const state = memberExemptions;
+  const entry = state?.entries.get(event.target.value);
+  if (!entry || state.busy) return;
+  if (event.target.checked === entry.exempt) state.changes.delete(event.target.value);
+  else state.changes.set(event.target.value, event.target.checked);
+  renderMemberExemptionFooter();
+});
+$('#memberExemptionDialog').addEventListener('cancel', event => { if (memberExemptions?.busy) event.preventDefault(); });
+$('#memberExemptionDialog').addEventListener('close', () => { if (!$('#memberExemptionDialog').open) memberExemptions = null; });
 $('#downloadForm').addEventListener('submit', downloadZip);
 $('#exportExcelButton').addEventListener('click', exportExcel);
 $('#coursePeriodType').addEventListener('change', () => updateCoursePeriod());
@@ -726,6 +864,7 @@ document.addEventListener('click', async event => {
   if (button.dataset.courseCopy) openCourse(button.dataset.courseCopy, true);
   if (button.dataset.courseDownload) openDownload(button.dataset.courseDownload);
   if (button.dataset.memberEdit) openMember(button.dataset.memberEdit);
+  if (button.dataset.memberExemptions) openMemberExemptions(button.dataset.memberExemptions);
   if (button.dataset.recordMember) openRecord(button.dataset.recordMember, button.dataset.recordCourse);
   if (button.dataset.review) { if ($('#recordDialog').open) closeDialog($('#recordDialog')); openReview(button.dataset.review); }
   if (button.dataset.previewFile) previewFile(button.dataset.previewFile);

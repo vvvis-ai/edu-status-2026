@@ -43,3 +43,17 @@ table{width:100%;border-collapse:separate;border-spacing:0;font-size:.88rem}th{t
 .certificate-saved{border-color:#b4dcc8;background:#f6fcf8}
 @media(max-width:620px){.certificate-fields{grid-template-columns:minmax(0,1fr)}.certificate-import-dialog .dialog-footer{padding:12px}}
 @media(max-width:460px){.certificate-batch-course{grid-template-columns:minmax(0,1fr)}}
+
+.dialog.member-exemption-dialog{width:min(760px,calc(100vw - 24px));max-height:90vh}
+.member-exemption-dialog>form{display:flex;flex-direction:column;max-height:90vh}
+.member-exemption-dialog .dialog-body{overflow:auto}
+.member-exemption-filters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:10px}
+.member-exemption-list{display:grid;gap:8px;padding:0;margin:0;list-style:none}
+.member-exemption-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:12px;padding:12px 14px;border:1px solid var(--border);border-radius:12px}
+.member-exemption-course{min-width:0;overflow-wrap:anywhere}
+.member-exemption-row .checkbox-line{white-space:nowrap}
+.member-exemption-row .row{gap:6px;margin-top:5px}
+.member-exemption-footer{flex-wrap:wrap}
+.member-exemption-summary{flex-basis:100%;font-size:13px}
+.member-exemption-summary span{display:block;margin-top:3px;color:#855b08}
+@media(max-width:460px){.member-exemption-dialog .dialog-footer{padding:12px;gap:8px}.member-exemption-row{padding:10px;gap:8px}}
