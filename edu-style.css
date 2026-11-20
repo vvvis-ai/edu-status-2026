@@ -25,6 +25,12 @@ table{width:100%;border-collapse:separate;border-spacing:0;font-size:.88rem}th{t
 .certificate-drop{padding:20px;cursor:default}
 .certificate-drop .form-help{margin:6px 0 12px}
 .certificate-instructions{margin:12px 0}
+.certificate-batch{border:1px solid var(--border);border-radius:12px;background:#fafbfe;padding:12px 14px;margin-bottom:12px}
+.certificate-batch-course{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:10px}
+.certificate-batch-course select{width:100%;min-width:0}
+.certificate-batch-options{display:flex;flex-wrap:wrap;gap:8px 20px}
+.certificate-batch .form-help{margin:7px 0}
+.certificate-batch .form-help:last-child{margin-bottom:0}
 .certificate-rows{display:grid;gap:10px;margin:0;padding:0;list-style:none}
 .certificate-row{min-width:0;border:1px solid var(--border);border-radius:12px;padding:12px 14px}
 .certificate-row-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
@@ -36,3 +42,4 @@ table{width:100%;border-collapse:separate;border-spacing:0;font-size:.88rem}th{t
 .certificate-confirm{margin-top:9px}
 .certificate-saved{border-color:#b4dcc8;background:#f6fcf8}
 @media(max-width:620px){.certificate-fields{grid-template-columns:minmax(0,1fr)}.certificate-import-dialog .dialog-footer{padding:12px}}
+@media(max-width:460px){.certificate-batch-course{grid-template-columns:minmax(0,1fr)}}

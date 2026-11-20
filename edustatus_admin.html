@@ -79,6 +79,18 @@
         <input id="certificateFiles" type="file" multiple hidden>
       </div>
       <p class="form-help certificate-instructions">이름·교육·수료일을 확인한 뒤 등록하세요. 같은 부서원과 교육에 선택한 파일은 함께 저장하며 가장 늦은 날짜를 수료일로 기록합니다.</p>
+      <div id="certificateBatch" class="certificate-batch" hidden>
+        <div class="certificate-batch-course">
+          <label class="field" for="certificateBatchCourse">일괄 지정할 교육<select id="certificateBatchCourse" aria-describedby="certificateBatchHelp"></select></label>
+          <button id="certificateApplyCourse" class="button secondary" type="button" disabled>교육 일괄 지정</button>
+        </div>
+        <p id="certificateBatchHelp" class="form-help">기본으로 교육이 비어 있는 파일에 적용합니다.</p>
+        <div class="certificate-batch-options">
+          <label class="checkbox-line"><input id="certificateReplaceCourse" type="checkbox"> 이미 지정된 교육도 변경</label>
+          <label class="checkbox-line"><input id="certificateSelectAll" type="checkbox" aria-controls="certificateRows"> 승인 가능 파일 전체 선택</label>
+        </div>
+        <p id="certificateBatchNotice" class="form-help" role="status" hidden></p>
+      </div>
       <p id="certificateProgress" role="status" aria-live="polite"></p>
       <ul id="certificateRows" class="certificate-rows" aria-label="수료증별 판독 결과"></ul>
       <p id="certificateError" class="field-error" role="alert" hidden></p>

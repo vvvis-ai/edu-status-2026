@@ -13,6 +13,12 @@ export function initCertificateImport({getData, reloadData, viewStatus}) {
   const pickButton = byId('certificatePick');
   const statusButton = byId('certificateStatus');
   const saveButton = byId('certificateSave');
+  const batch = byId('certificateBatch');
+  const batchCourse = byId('certificateBatchCourse');
+  const applyCourse = byId('certificateApplyCourse');
+  const replaceCourse = byId('certificateReplaceCourse');
+  const selectAll = byId('certificateSelectAll');
+  const batchNotice = byId('certificateBatchNotice');
   const rowList = byId('certificateRows');
   const progress = byId('certificateProgress');
   const error = byId('certificateError');
@@ -40,12 +46,28 @@ export function initCertificateImport({getData, reloadData, viewStatus}) {
   }
 
   function showError(message = '') { error.hidden = !message; error.textContent = message; }
+  function showBatchNotice(message = '') { batchNotice.hidden = !message; batchNotice.textContent = message; }
+
+  function canEdit(row) { return !row.saved && !row.blocked; }
+
+  function canApplyCourse(row) {
+    return canEdit(row) && row.courseId !== batchCourse.value && (!row.courseId || replaceCourse.checked);
+  }
+
+  function updateAssignment(row, field, value) {
+    row[field] = value;
+    row.selected = false;
+    row.failure = '';
+  }
 
   function putRows() {
     const memberOptions = data.members.filter(member => member.active)
       .map(member => `<option value="${e(member.id)}">${e([member.name, member.team, member.position].filter(Boolean).join(' · '))}</option>`).join('');
     const courseOptions = data.courses.filter(course => course.published && !course.archived)
       .map(course => `<option value="${e(course.id)}">${e(course.name)} · ${e(course.year)}년${course.periodType === 'year' ? '' : ` ${e(course.periodValue)}${course.periodType === 'month' ? '월' : '분기'}`}</option>`).join('');
+    const previousBatchCourse = batchCourse.value;
+    batchCourse.innerHTML = `<option value="">교육 선택</option>${courseOptions}`;
+    if ([...batchCourse.options].some(option => option.value === previousBatchCourse)) batchCourse.value = previousBatchCourse;
     rowList.innerHTML = rows.map(row => {
       const detected = [row.detected?.name, row.detected?.course, row.detected?.date].filter(Boolean);
       const source = detected.length ? `${row.detected.source} · ${detected.join(' · ')}` : '';
@@ -56,11 +78,11 @@ export function initCertificateImport({getData, reloadData, viewStatus}) {
         </div></div>
         ${source ? `<p class="form-help certificate-detected">${e(source)}</p>` : ''}
         ${row.hint ? `<p class="form-help certificate-detected">${e(row.hint)}</p>` : ''}
-        ${row.blocked || row.saved ? '' : `<div class="certificate-fields">
+        ${canEdit(row) ? `<div class="certificate-fields">
           <label class="field">부서원<select data-field="memberId"><option value="">부서원 선택</option>${memberOptions}</select></label>
           <label class="field">교육<select data-field="courseId"><option value="">교육 선택</option>${courseOptions}</select></label>
           <label class="field">수료일<input type="date" data-field="date" max="${today()}"></label>
-        </div><label class="checkbox-line certificate-confirm"><input type="checkbox" data-field="selected"> 승인·등록 대상에 포함</label>`}
+        </div><label class="checkbox-line certificate-confirm"><input type="checkbox" data-field="selected"> 승인·등록 대상에 포함</label>` : ''}
         <p class="form-help certificate-row-message" data-certificate-message></p>
       </li>`;
     }).join('');
@@ -75,6 +97,7 @@ export function initCertificateImport({getData, reloadData, viewStatus}) {
     const busy = !!reading || saving;
     let included = 0;
     let saved = 0;
+    let eligibleCount = 0;
     const elements = rowList.children;
     rows.forEach((row, index) => {
       const item = elements[index];
@@ -82,6 +105,7 @@ export function initCertificateImport({getData, reloadData, viewStatus}) {
       const eligible = !!state?.member;
       const selected = item.querySelector('[data-field="selected"]');
       if (!eligible) row.selected = false;
+      if (eligible) eligibleCount++;
       if (selected) {
         selected.checked = row.selected;
         selected.disabled = busy || !eligible;
@@ -97,6 +121,12 @@ export function initCertificateImport({getData, reloadData, viewStatus}) {
       item.classList.toggle('certificate-saved', !!row.saved);
     });
     pickButton.disabled = busy;
+    batch.hidden = !rows.some(canEdit);
+    batchCourse.disabled = replaceCourse.disabled = busy || batchCourse.options.length <= 1;
+    applyCourse.disabled = busy || !batchCourse.value || !rows.some(canApplyCourse);
+    selectAll.disabled = busy || !eligibleCount;
+    selectAll.checked = eligibleCount > 0 && included === eligibleCount;
+    selectAll.indeterminate = included > 0 && included < eligibleCount;
     for (const button of dialog.querySelectorAll('[data-close]')) button.disabled = saving;
     statusButton.hidden = !saved;
     statusButton.disabled = busy;
@@ -114,6 +144,7 @@ export function initCertificateImport({getData, reloadData, viewStatus}) {
     reading = controller;
     let reader;
     showError();
+    showBatchNotice();
     updateControls();
     try {
       for (const [index, file] of files.entries()) {
@@ -168,6 +199,7 @@ export function initCertificateImport({getData, reloadData, viewStatus}) {
     if (!groups.size) return;
     saving = true;
     showError();
+    showBatchNotice();
     updateControls();
     let saved = 0;
     let index = 0;
@@ -233,13 +265,35 @@ export function initCertificateImport({getData, reloadData, viewStatus}) {
   });
   dialog.addEventListener('dragover', event => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); });
   dialog.addEventListener('drop', event => { if (event.dataTransfer.files.length) event.preventDefault(); });
+  for (const control of [batchCourse, replaceCourse]) {
+    control.addEventListener('change', () => { showBatchNotice(); updateControls(); });
+  }
+  applyCourse.addEventListener('click', () => {
+    if (applyCourse.disabled) return;
+    let count = 0;
+    rows.forEach((row, index) => {
+      if (!canApplyCourse(row)) return;
+      updateAssignment(row, 'courseId', batchCourse.value);
+      rowList.children[index].querySelector('[data-field="courseId"]').value = row.courseId;
+      count++;
+    });
+    showBatchNotice(`${count}개 파일에 교육을 지정했습니다.`);
+    updateControls();
+  });
+  selectAll.addEventListener('change', () => {
+    if (selectAll.disabled) return;
+    for (const row of rows) {
+      const selected = selectAll.checked && !!rowState(row)?.member;
+      if (row.selected !== selected) { row.selected = selected; row.failure = ''; }
+    }
+    updateControls();
+  });
   rowList.addEventListener('change', event => {
     const field = event.target.dataset.field;
     const row = rows.find(item => item.id === Number(event.target.closest('[data-certificate-row]')?.dataset.certificateRow));
     if (!field || !row) return;
-    if (field === 'selected') row.selected = event.target.checked;
-    else { row[field] = event.target.value; row.selected = false; }
-    row.failure = '';
+    if (field === 'selected') { row.selected = event.target.checked; row.failure = ''; }
+    else updateAssignment(row, field, event.target.value);
     updateControls();
   });
   rowList.addEventListener('click', event => {
@@ -277,6 +331,9 @@ export function initCertificateImport({getData, reloadData, viewStatus}) {
     reading = null;
     rows = [];
     rowList.replaceChildren();
+    batchCourse.value = '';
+    replaceCourse.checked = false;
+    showBatchNotice();
     showError();
   });
 }
