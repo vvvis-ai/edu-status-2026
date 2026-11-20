@@ -459,17 +459,20 @@ async function identifyFile(file) {
   return {type,ext};
 }
 
-async function submit(request, env) {
-  const member = await requireMember(request,env);
+async function submit(request, env, adminSession = null) {
+  const selectedMember = adminSession ? null : await requireMember(request,env);
   let form;
   try { form = await boundedBody(request,MAX_TOTAL_BYTES+2*1024*1024).formData(); }
   catch (error) { if (error instanceof ApiError) throw error; fail(400,'첨부파일을 읽지 못했습니다. 파일을 다시 선택해 주세요.'); }
+  const member = selectedMember || await required(env,'members',cleanId(form.get('memberId')));
   const expectedMemberId = form.get('expectedMemberId');
-  if (expectedMemberId && expectedMemberId !== member.id) fail(409,'선택한 이름이 다른 탭에서 변경되었습니다. 이름을 다시 선택해 주세요.','MEMBER_CHANGED');
+  if (selectedMember && expectedMemberId && expectedMemberId !== member.id) fail(409,'선택한 이름이 다른 탭에서 변경되었습니다. 이름을 다시 선택해 주세요.','MEMBER_CHANGED');
   const courseId = cleanId(form.get('courseId'));
   const course = await required(env,'courses',courseId);
+  if (adminSession && (String(member.version) !== form.get('memberVersion') || String(course.version) !== form.get('courseVersion'))) conflict();
+  if (!member.active) fail(403,'재직 부서원의 수료증만 등록할 수 있습니다.');
   if (!course.published || course.archived) fail(403,'현재 제출을 받는 교육이 아닙니다.');
-  if (!isTarget(course,member)) fail(403,'본인에게 지정된 교육만 제출할 수 있습니다.');
+  if (!isTarget(course,member)) fail(403,adminSession ? '해당 부서원의 교육 대상 여부를 확인해 주세요.' : '본인에게 지정된 교육만 제출할 수 있습니다.');
   const completedOn = date(form.get('completedOn'),'수료일',true);
   if (completedOn > today()) fail(400,'수료일은 오늘 또는 이전 날짜로 입력해 주세요.');
   const comment = text(form.get('comment'),'제출 메모',2000);
@@ -485,15 +488,28 @@ async function submit(request, env) {
     formats.push(await identifyFile(file));
   }
   const enrollment = await ensureEnrollment(env,member.id,course.id);
-  const [submissions,overrides] = await Promise.all([all(env,'submissions'),all(env,'overrides')]);
-  if (getStatus(course,member,submissions,overrides) === 'approved') fail(409,'이미 이수 승인된 교육입니다. 변경이 필요하면 담당자에게 문의해 주세요.');
-  if (getStatus(course,member,submissions,overrides) === 'exempt') fail(403,'면제 처리된 교육입니다.');
+  const pair = pairId(member.id,course.id);
+  const [rows,currentOverride] = await Promise.all([
+    env.DB.prepare("SELECT data FROM records WHERE collection = 'submissions' AND json_extract(data,'$.memberId') = ? AND json_extract(data,'$.courseId') = ?").bind(member.id,course.id).all(),
+    get(env,'overrides',pair),
+  ]);
+  const submissions = rows.results.map(row => JSON.parse(row.data));
   const latest = getLatestSubmission(submissions,member.id,course.id);
+  if (adminSession) {
+    if (form.get('expectedSubmission') !== (latest ? `${latest.id}|${latest.version}` : '')) conflict();
+    if (currentOverride) fail(409,'담당자 수동 처리 기록이 있습니다. 이수 현황에서 해당 기록을 확인해 주세요.');
+    if (latest?.status === 'approved') fail(409,'이미 승인한 수료증이 있습니다.');
+  } else {
+    const status = getStatus(course,member,submissions,currentOverride ? [currentOverride] : []);
+    if (status === 'approved') fail(409,'이미 이수 승인된 교육입니다. 변경이 필요하면 담당자에게 문의해 주세요.');
+    if (status === 'exempt') fail(403,'면제 처리된 교육입니다.');
+  }
   const submittedAt = new Date(Math.max(Date.now(),latest ? Date.parse(latest.submittedAt)+1 : 0)).toISOString();
   const id = uuid();
   const storedFiles = uploads.map((file,index) => ({id:uuid(),name:text(file.name,'파일명',255,true),type:formats[index].type,size:file.size,ext:formats[index].ext,submissionId:id,courseId:course.id,memberId:member.id,createdAt:submittedAt,version:1}));
   storedFiles.forEach(file => { file.key = `certificates/${course.id}/${member.id}/${id}/${file.id}.${file.ext}`; });
-  const submission = {id,courseId:course.id,memberId:member.id,status:'pending',completedOn,comment,submittedAt,reviewedAt:'',reviewNote:'',revision:(enrollment.revision || 0)+1,version:1,files:storedFiles.map(publicFile)};
+  const submission = {id,courseId:course.id,memberId:member.id,status:adminSession ? 'approved' : 'pending',completedOn,comment,submittedAt,reviewedAt:adminSession ? submittedAt : '',reviewNote:adminSession ? '관리자 일괄 등록' : '',revision:(enrollment.revision || 0)+1,version:1,files:storedFiles.map(publicFile)};
+  const audit = auditItem(adminSession ? 'certificate_imported' : 'certificate_submitted', {submissionId:id,courseId:course.id,memberId:member.id,fileCount:storedFiles.length},adminSession ? 'admin' : member.id);
   const next = {...enrollment,latestSubmissionId:id,revision:submission.revision,version:enrollment.version+1,nonce:uuid()};
   const lock = guard(env,next);
   const written = [];
@@ -512,8 +528,8 @@ async function submit(request, env) {
       env.DB.prepare("UPDATE records SET data = ?, version = ? WHERE collection = 'enrollments' AND id = ? AND version = ? AND EXISTS (SELECT 1 FROM records WHERE collection = 'courses' AND id = ? AND version = ?) AND EXISTS (SELECT 1 FROM records WHERE collection = 'members' AND id = ? AND version = ?)").bind(stringify(next),next.version,enrollment.id,enrollment.version,course.id,course.version,member.id,member.version),
       guardedInsert(env,'submissions',submission,lock),
       ...storedFiles.map(file => guardedInsert(env,'files',file,lock)),
-      guardedDelete(env,'overrides',pairId(member.id,course.id),lock),
-      guardedInsert(env,'audit',auditItem('certificate_submitted',{submissionId:id,courseId:course.id,memberId:member.id,fileCount:storedFiles.length},member.id),lock)
+      guardedDelete(env,'overrides',pair,lock),
+      guardedInsert(env,'audit',audit,lock)
     ]);
     if (!changes(results[0])) conflict();
   } catch (error) {
@@ -740,6 +756,7 @@ async function route(request, env) {
     }
     if (path==='/api/admin/member-order' && request.method==='PUT') return saveMemberOrder(request,env);
     if (path==='/api/admin/department-chart' && request.method==='PUT') return saveDepartmentChart(request,env);
+    if (path==='/api/admin/certificate-import' && request.method==='POST') return submit(request,env,adminSession);
     if (path==='/api/admin/courses' && request.method==='POST') return saveCourse(request,env);
     match = /^\/api\/admin\/courses\/([\w:-]+)$/.exec(path);
     if (match && request.method==='PUT') return saveCourse(request,env,match[1]);

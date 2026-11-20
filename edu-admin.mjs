@@ -7,6 +7,7 @@ import {
   isNewCourse, STATUS_LABELS,
 } from './edu-shared.mjs';
 import {departmentMarkup} from './edu-department.mjs';
+import {initCertificateImport} from './edu-certificate-import.mjs';
 
 const $ = (selector, scope = document) => scope.querySelector(selector);
 const $$ = (selector, scope = document) => [...scope.querySelectorAll(selector)];
@@ -306,7 +307,7 @@ function renderStatus() {
 }
 const auditActions = {
   certificate_access_requested:'파일 접근 요청 접수', certificates_downloaded:'ZIP 요청 집계',
-  certificate_submitted:'수료증 제출', submission_reviewed:'수료증 검토',
+  certificate_submitted:'수료증 제출', certificate_imported:'수료증 일괄 등록', submission_reviewed:'수료증 검토',
   course_created:'교육 등록', course_updated:'교육 수정', member_created:'부서원 등록', member_updated:'부서원 수정',
   member_order_updated:'이름 순서 변경', department_chart_updated:'조직도 변경',
   completion_override:'이수 상태 수동 처리', legacy_imported:'기존 기록 병합',
@@ -749,4 +750,10 @@ async function boot() {
   try { const session = await api('/admin/session'); if (session.authenticated) await enterDashboard(); }
   catch (error) { setError($('#loginError'), `서버에 연결하지 못했습니다. ${error.message}`); }
 }
+initCertificateImport({getData:() => data, reloadData:loadData, viewStatus:year => {
+  if (year) $('#yearFilter').value = String(year);
+  $('#periodFilter').value = 'all';
+  $('#adminSearch').value = '';
+  switchTab('status', true);
+}});
 void boot();

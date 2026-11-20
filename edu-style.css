@@ -20,3 +20,19 @@ table{width:100%;border-collapse:separate;border-spacing:0;font-size:.88rem}th{t
 @media(max-width:480px){.department-teams{grid-template-columns:1fr;padding-left:16px;border-left:2px solid #c7c3e1;margin-left:8px}.department-root:after{display:none}.department-root{margin-left:8px;max-width:none}.department-team:before{display:block;top:26px;left:-18px;width:16px;height:0;border-left:0;border-top:2px solid #c7c3e1}.department-tree .name-card{min-height:56px}.department-team-fields{grid-template-columns:1fr}.department-preview{padding:12px}.department-assignment-heading{align-items:flex-start;flex-direction:column}}
 
 .toast-region{pointer-events:none}
+.dialog.certificate-import-dialog{width:min(940px,calc(100vw - 24px));max-height:90vh}
+.certificate-import-dialog .dialog-footer{flex-wrap:wrap}
+.certificate-drop{padding:20px;cursor:default}
+.certificate-drop .form-help{margin:6px 0 12px}
+.certificate-instructions{margin:12px 0}
+.certificate-rows{display:grid;gap:10px;margin:0;padding:0;list-style:none}
+.certificate-row{min-width:0;border:1px solid var(--border);border-radius:12px;padding:12px 14px}
+.certificate-row-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.certificate-filename,.certificate-detected,.certificate-row-message,#certificateProgress{overflow-wrap:anywhere}
+.certificate-row-head .button{font-size:12px;padding:6px 8px}
+.certificate-detected,.certificate-row-message{margin:5px 0 0}
+.certificate-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.6fr) minmax(145px,.65fr);gap:12px;margin-top:10px}
+.certificate-fields .field,.certificate-fields select,.certificate-fields input{width:100%;min-width:0}
+.certificate-confirm{margin-top:9px}
+.certificate-saved{border-color:#b4dcc8;background:#f6fcf8}
+@media(max-width:620px){.certificate-fields{grid-template-columns:minmax(0,1fr)}.certificate-import-dialog .dialog-footer{padding:12px}}

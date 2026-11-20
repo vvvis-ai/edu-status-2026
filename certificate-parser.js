@@ -41,7 +41,8 @@
     }).filter(Boolean);
   }
 
-  const labels = ['상시학습인정시간','교육과정명','교육기관명','교육종료일','교육과정','교육기간','수강기간','학습기간','교육시간','인정시간','학습시간','이수시간','과정시간','수료일자','이수일자','수료일','이수일','발급일','발행일','교육기관','주관기관','발급기관','과정명','과정','기간','성명','이름','부서','소속','직급','직위','생년월일'];
+  const courseLabels = ['교육과정명','학습과정명','교육과정','교육명','과정명','강좌명','과정'];
+  const labels = ['상시학습인정시간','교육기관명','교육종료일',...courseLabels,'교육기간','수강기간','학습기간','교육시간','인정시간','학습시간','이수시간','과정시간','수료일자','이수일자','수료일','이수일','발급일','발행일','교육기관','주관기관','발급기관','기간','성명','이름','부서','소속','직급','직위','생년월일'];
   const spaced = word => [...word].join('[ \\t]*');
   const labelPattern = labels.map(spaced).join('|');
   function normalizeText(text) {
@@ -74,7 +75,7 @@
       } else if (isPeriod(active) && /^(?:[~〜～–—-]\s*)?(?:19|20)\d{2}\s*[.년/-]/.test(line)
           && (!fields.get(active) || /[~〜～–—-]\s*$/.test(fields.get(active)) || /^[~〜～–—-]/.test(line))) {
         fields.set(active,[fields.get(active),line].filter(Boolean).join(' '));
-      } else if (active && (!fields.get(active) || /^(교육과정명|교육과정|과정명|과정)$/.test(active))
+      } else if (active && (!fields.get(active) || courseLabels.includes(active))
           && !/^(위\s*사람|소정의|위와\s*같이|본\s*증|※|\d{4}\s*[.년/-])/.test(line)
           && !/(원장|이사장|총장|센터장|협회장)$/.test(line.replace(/\s/g,''))) {
         fields.set(active,[fields.get(active),line].filter(Boolean).join(' '));
@@ -84,7 +85,7 @@
     const name = get('성명','이름').replace(/\s*[([][^)\]]*[)\]]\s*$/, '').replace(/\s/g,'') || extractNameFromFilename(filename);
     let dept = get('부서') || get('소속').replace(/^(부산(?:광역시)?\s*동구(?:청)?\s*|문화체육관광국\s*)/g,'').trim();
     if (!dept) dept = defaultDept;
-    let course = get('교육과정명','교육과정','과정명','과정');
+    let course = get(...courseLabels);
     // A two-column course/time table is not a label followed by a value.
     // Accept rows only below an explicit table header, and stop at its total.
     const tableHeader = lines.findIndex(l=>/^(?:교육과정명|교육과정|과정명)\s+(?:수강시간|교육시간|학습시간)$/.test(l.replace(/[ \t]+/g,' ')));

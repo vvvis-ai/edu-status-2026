@@ -84,6 +84,49 @@ test('course edits use optimistic concurrency, and member edits preserve histori
   assert.ok(data.audit.some(entry=>entry.action==='member_updated' && entry.detail.before.team==='총무팀' && entry.detail.after.team==='새로운팀'));
 });
 
+test('administrator certificate import approves originals, preserves earlier records and rejects stale or duplicate imports', async t => {
+  const f = await fixture(t, {courses:[course('c1')],members:[member('m1',{legacyCompletions:['c1']}),member('m2'),member('left',{active:false})]});
+  const admin = await f.login(), second = await f.select('m2');
+  function importForm(memberId = 'm1', expected = '', memberVersion = '1') {
+    const form = f.form({file:PNG,name:'가상수료증.png',type:'image/png'});
+    form.append('files', new File([PNG], '두번째.png', {type:'image/png'}));
+    form.set('memberId',memberId);
+    form.set('memberVersion',memberVersion);
+    form.set('courseVersion','1');
+    form.set('expectedSubmission',expected);
+    return form;
+  }
+  const upload = (body, cookie = admin) => f.call('/admin/certificate-import',{method:'POST',cookie,body});
+  assert.equal((await upload(importForm(),second)).status,401);
+  assert.equal((await upload(importForm('left'))).status,403);
+  assert.equal((await upload(importForm('m1','','2'))).status,409);
+  const [first,duplicate] = await Promise.all([upload(importForm()),upload(importForm())]);
+  assert.deepEqual([first.status,duplicate.status].sort(),[201,409]);
+  const {submission} = await (first.ok ? first : duplicate).json();
+  assert.equal(submission.status,'approved');
+  assert.equal(submission.completedOn,'2026-01-01');
+  assert.equal(submission.files.length,2);
+  assert.equal((await upload(importForm('m1',`${submission.id}|${submission.version}`))).status,409);
+  const firstMember = await f.select('m1');
+  const mine = await (await f.call('/me',{cookie:firstMember})).json();
+  assert.deepEqual(mine.member.legacyCompletions,['c1']);
+  assert.equal(mine.submissions[0].id,submission.id);
+  assert.deepEqual(Buffer.from(await (await f.call(`/files/${submission.files[0].id}`,{cookie:firstMember})).arrayBuffer()),PNG);
+  assert.equal((await f.call(`/files/${submission.files[0].id}`,{cookie:second})).status,403);
+
+  const pendingResponse = await f.call('/submissions',{method:'POST',cookie:second,body:f.form({file:PNG,name:'기존.png',expectedMemberId:'m2'})});
+  const {submission:pending} = await pendingResponse.json();
+  assert.equal(pending.status,'pending');
+  assert.equal((await upload(importForm('m2'))).status,409);
+  const result = await upload(importForm('m2',`${pending.id}|${pending.version}`));
+  assert.equal(result.status,201);
+  const data = await (await f.call('/admin/data',{cookie:admin})).json();
+  assert.equal(data.submissions.length,3);
+  assert.equal(data.submissions.find(item => item.id === pending.id).status,'pending');
+  assert.equal(data.audit.filter(item => item.action === 'certificate_imported' && item.actor === 'admin').length,2);
+  assert.equal((await f.call('/admin/courses/c1/download',{cookie:admin})).status,200);
+});
+
 test('member order defaults to existing ID order, persists for public/admin views and preserves education and personnel records',async t=>{
   const f=await fixture(t,{courses:[course('c1')],members:[member('m2'),member('left',{active:false}),member('m1',{legacyCompletions:['c1']})]});
   const admin=await f.login(),selected=await f.select('m2');

@@ -9,7 +9,7 @@ for(const directory of ['server','scripts','tests']) {
     if(/\.(?:mjs|cjs)$/.test(file))files.push(`${directory}/${file}`);
   }
 }
-files.push('certificate-parser.js','certificate-ocr.js','수료증_엑셀일괄변환.mjs');
+files.push('certificate-parser.js','certificate-ocr.js','edu-ocr-worker.js','수료증_엑셀일괄변환.mjs');
 for(const file of files) {
   const result=spawnSync(process.execPath,['--check',path.join(root,file)],{stdio:'inherit'});
   if(result.error)throw result.error;

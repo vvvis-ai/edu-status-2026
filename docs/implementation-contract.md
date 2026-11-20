@@ -27,6 +27,7 @@
 - PUT /api/admin/member-order `{memberIds:현재 재직자 전원 ID,version}` → `{memberOrder}`. 관리자 전용. 중복·없는 ID는400, 버전 또는 재직자 집합 변경은409. 별도 `settings/member-order` 레코드와 감사로그만 원자적으로 저장하며 부서원 버전·이수·제출 기록은 변경하지 않음. 저장 순서에 없는 신규 재직자는 끝에 표시.
 - GET /api/admin/members/:id/history → `{history,serverTime}`. 관리자 전용, 해당 부서원의 등록·인사 변경 감사 이력을 최신순으로 전량 조회. 대시보드의 최근 감사로그 500건 제한과 독립.
 - POST /api/admin/submissions/:id/review `{status:'approved'|'needs_revision',reviewNote,version}` → `{submission}`. 최신 제출만 검토.
+- POST /api/admin/certificate-import : 관리자 확인 뒤 부서원·교육 한 쌍씩 FormData로 제출. `memberId`, `courseId`, `memberVersion`, `courseVersion`, `expectedSubmission`(`id|version` 또는 빈 문자열), `completedOn`, 반복 `files`. 일반 제출과 동일한 형식·용량·원본 검증으로 `{submission}`(201, approved)과 `certificate_imported` 감사 기록을 저장. 승인된 기존 수료증이나 수동 처리 기록, 변경된 대상 정보·최신 제출은 거부. 브라우저가 여러 쌍의 결과를 각각 집계.
 - PUT /api/admin/overrides/:memberId/:courseId `{status:'approved'|'not_submitted'|'exempt'|'clear',reason,version:0또는현재값}` → `{override}`. 수동 처리는 사유 필수. 검토보다 override 우선. 새 제출/검토 시 override 제거해 새 결과 반영.
 - GET /api/admin/courses/:id/download?scope=approved|latest → ZIP. 기본 approved. 각 인원의 최신 제출만 대상. 하나라도 파일 누락되면 오류, 빈 ZIP 금지. 파일명 교육명/상태/팀_이름_수료일_번호.확장자, 이름 충돌시 memberId 포함.
 - POST /api/admin/import-legacy `{members:[{id,name,position,completions}],confirm:true}` → import summary. 원본을 삭제하지 않는 초기 이수기록 병합, 이름충돌 시409. 이미 제출/override 있는 기록은 상태 덮어쓰지 않음. 감사로그.

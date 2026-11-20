@@ -5,10 +5,11 @@ import {Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
 import {createLocalEnvironment} from './local-storage.mjs';
 import {handleApi} from './api.mjs';
+import {publicAssets,staticPolicy} from './static-assets.mjs';
 
 const root=path.resolve(import.meta.dirname,'..');
-const allowed = new Set(['edustatus_all.html','edustatus_admin.html','edu-style.css','edu-client.mjs','edu-shared.mjs','edu-public.mjs','edu-admin.mjs','edu-department.mjs','edu-workbook.mjs','edu-zip.mjs']);
-const mime={'.html':'text/html; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8'};
+const allowed = new Set(publicAssets);
+const mime={'.html':'text/html; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.txt':'text/plain; charset=utf-8'};
 export async function startLocalServer({port=3198,host='127.0.0.1',dataDirectory=path.join(root,'.edu-data'),adminPassword,sessionSecret,seed}={}) {
   let variables={};
   try { variables=Object.fromEntries((await fs.readFile(path.join(root,'.dev.vars'),'utf8')).split(/\r?\n/).filter(l=>l.trim()&&!l.startsWith('#')).map(l=>{const i=l.indexOf('=');return[l.slice(0,i),l.slice(i+1)];})); } catch(error) { if(error.code!=='ENOENT')throw error; }
@@ -36,7 +37,7 @@ export async function startLocalServer({port=3198,host='127.0.0.1',dataDirectory
         }
       }
       response.headers.set('Cache-Control','no-store');response.headers.set('X-Content-Type-Options','nosniff');response.headers.set('Referrer-Policy','same-origin');
-      if (!response.headers.has('Content-Security-Policy')) response.headers.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; frame-src 'self' blob:; object-src 'self' blob:; base-uri 'self'; form-action 'self'; frame-ancestors 'self'");
+      if (!response.headers.has('Content-Security-Policy')) response.headers.set('Content-Security-Policy',staticPolicy(url.pathname));
       res.statusCode=response.status;
       for(const [name,value] of response.headers) if(name!=='set-cookie')res.setHeader(name,value);
       const cookies=response.headers.getSetCookie();if(cookies.length)res.setHeader('Set-Cookie',cookies);
