@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {handleApi} from '../server/api.mjs';
 import {createLocalEnvironment} from '../server/local-storage.mjs';
+import {disposeExpiredCertificates} from '../server/certificate-disposal.mjs';
 import {getProgress, getStatus} from '../edu-shared.mjs';
 
 const PDF = new TextEncoder().encode('%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n');
@@ -50,6 +51,189 @@ async function fixture(t,seed={courses:[course('c1')],members:[member('m1'),memb
   }
   return {env,call,login,select,form};
 }
+
+test('manual bulk disposal requires confirmation and admin access, and deletes only the selected submission revisions', async t => {
+  const f = await fixture(t);
+  const admin = await f.login(), first = await f.select(), second = await f.select('m2');
+  const submit = async (cookie,form) => {
+    const response = await f.call('/submissions',{method:'POST',cookie,body:form});
+    assert.equal(response.status,201);
+    return (await response.json()).submission;
+  };
+  const old = await submit(first,f.form({name:'이전가상.pdf'}));
+  const current = await submit(first,f.form({name:'유지할가상.pdf'}));
+  const other = await submit(second,f.form({name:'가상사진.png',file:PNG,type:'image/png',expectedMemberId:'m2'}));
+  const reviewed = await f.call(`/admin/submissions/${other.id}/review`,{method:'POST',cookie:admin,body:{status:'approved',version:other.version}});
+  assert.equal(reviewed.status,200);
+  const {submission:approved} = await reviewed.json();
+  const submissions = [old,approved].map(({id,version}) => ({id,version}));
+  const dispose = (body, cookie = admin, origin) => f.call('/admin/certificate-disposal',{method:'POST',cookie,body,origin});
+  assert.equal((await dispose({confirm:true,submissions},first)).status,401);
+  assert.equal((await dispose({confirm:true,submissions},admin,'https://example.net')).status,403);
+  assert.equal((await dispose({confirm:false,submissions})).status,400);
+  assert.equal((await dispose({confirm:true,submissions:[submissions[0],submissions[0]]})).status,400);
+  const stale = await dispose({confirm:true,submissions:[submissions[0],{id:other.id,version:other.version}]});
+  assert.equal(stale.status,409);
+  assert.equal((await stale.json()).code,'VERSION_CONFLICT');
+  for (const submission of [old,approved]) {
+    const readable = await f.call(`/files/${submission.files[0].id}`,{cookie:admin});
+    assert.equal(readable.status,200);
+    await readable.arrayBuffer();
+  }
+
+  const outcomes = await Promise.all([dispose({confirm:true,submissions}),dispose({confirm:true,submissions})]);
+  assert.deepEqual(outcomes.map(response=>response.status).sort(),[200,409]);
+  const result = await outcomes.find(response=>response.ok).json();
+  assert.deepEqual([result.submissionCount,result.deleted,result.pending],[2,2,0]);
+  const data = await (await f.call('/admin/data',{cookie:admin})).json();
+  for (const original of [old,approved]) {
+    const submission = data.submissions.find(item=>item.id===original.id);
+    assert.deepEqual(submission.files,[]);
+    assert.equal(submission.completedOn,original.completedOn);
+    assert.equal(submission.status,original.status);
+    assert.equal((await f.call(`/files/${original.files[0].id}`,{cookie:admin})).status,404);
+  }
+  assert.deepEqual(data.submissions.find(item=>item.id===current.id).files,current.files);
+  const exported = await f.call('/admin/courses/c1/download?scope=latest',{cookie:admin});
+  assert.equal(exported.status,200);
+  assert.ok((await exported.arrayBuffer()).byteLength > 0);
+  const audit = data.audit.filter(entry=>entry.detail.requestId===result.requestId);
+  assert.equal(audit.filter(entry=>entry.action==='certificate_manual_disposal_requested').length,1);
+  assert.deepEqual(audit.filter(entry=>entry.action==='certificate_manually_disposed').map(entry=>entry.detail.fileId).sort(),[old.files[0].id,other.files[0].id].sort());
+  assert.ok(audit.every(entry=>entry.actor==='admin' && !entry.detail.name && !entry.detail.key));
+});
+
+test('manual bulk disposal blocks pending originals and retries failures and remaining batches in the current year', async t => {
+  t.mock.timers.enable({apis:['Date'],now:new Date('2026-11-25T01:00:00Z')});
+  const f = await fixture(t);
+  f.env.certificateRetentionEnabled = true;
+  const cookie = await f.select(), admin = await f.login();
+  const selections = [], allFiles = [];
+  const stored = f.env.DB.prepare('INSERT INTO records(collection,id,data,version) VALUES (?,?,?,1)');
+  for (let index = 0; index < 4; index++) {
+    const submissionId = `batch-${index}`, files = [];
+    for (let number = 0; number < 9; number++) {
+      const id = `file-${index}-${number}`, key = `certificates/c1/m1/${submissionId}/${id}.pdf`;
+      const file = {id,key,ext:'pdf',name:'가상.pdf',size:PDF.byteLength,type:'application/pdf',courseId:'c1',memberId:'m1',submissionId};
+      await f.env.FILES.put(key,PDF,{httpMetadata:{contentType:file.type}});
+      await stored.bind('files',id,JSON.stringify(file)).run();
+      allFiles.push(file);
+      files.push({id,name:file.name,size:file.size,type:file.type});
+    }
+    const submission = {id:submissionId,memberId:'m1',courseId:'c1',status:'pending',completedOn:'2026-11-20',files,version:1};
+    await stored.bind('submissions',submissionId,JSON.stringify(submission)).run();
+    selections.push({id:submissionId,version:1});
+  }
+  const remove = f.env.FILES.delete;
+  f.env.FILES.delete = async key => {
+    if (key === allFiles[0].key) throw new Error('Simulated file storage error');
+    return remove.call(f.env.FILES,key);
+  };
+  const response = await f.call('/admin/certificate-disposal',{method:'POST',cookie:admin,body:{confirm:true,submissions:selections}});
+  assert.equal(response.status,202);
+  const result = await response.json();
+  assert.deepEqual([result.submissionCount,result.deleted,result.pending],[4,31,5]);
+  const before = await (await f.call('/me',{cookie})).json();
+  assert.ok(before.submissions.every(submission=>submission.files.length===0 && !submission.manualDisposalId));
+  assert.equal(before.submissions.filter(submission=>submission.attachmentsPendingDisposal).length,2);
+  for (const file of [allFiles[0],allFiles.at(-1)]) {
+    assert.ok(await f.env.FILES.head(file.key));
+    assert.equal((await f.call(`/files/${file.id}`,{cookie})).status,410);
+  }
+  assert.equal((await f.call('/admin/courses/c1/download?scope=latest',{cookie:admin})).status,404);
+  f.env.FILES.delete = remove;
+  t.mock.timers.tick(30 * 60 * 1000);
+  assert.deepEqual(await disposeExpiredCertificates(f.env),{deleted:5,failed:0});
+  assert.ok((await Promise.all(allFiles.map(file=>f.env.FILES.head(file.key)))).every(file=>file===null));
+  const after = await (await f.call('/admin/data',{cookie:admin})).json();
+  assert.ok(after.submissions.every(submission=>!submission.attachmentsPendingDisposal && submission.attachmentsDisposedAt && submission.status==='pending'));
+  assert.equal(after.audit.filter(entry=>entry.action==='certificate_manually_disposed' && entry.detail.requestId===result.requestId).length,36);
+});
+
+test('year-end disposal blocks attachments at Korean midnight and removes PDF and photo revisions without losing completion', async t => {
+  t.mock.timers.enable({apis:['Date'],now:new Date('2026-12-31T14:59:59.999Z')});
+  const f = await fixture(t,{courses:[course('c1'),course('next',{year:2027})],members:[member('m1')]});
+  f.env.certificateRetentionEnabled = true;
+  const admin = await f.login(), employee = await f.select();
+  const submit = body => f.call('/submissions',{method:'POST',cookie:employee,body});
+  const getZip = () => f.call('/admin/courses/c1/download?scope=latest',{cookie:admin});
+  const {submission:earlier} = await (await submit(f.form({name:'이전.pdf'}))).json();
+  const {submission:latest} = await (await submit(f.form({file:PNG,type:'image/png',name:'최신.png'}))).json();
+  const {submission:next} = await (await submit(f.form({courseId:'next'}))).json();
+  const approve = await f.call(`/admin/submissions/${latest.id}/review`,{method:'POST',cookie:admin,body:{status:'approved',version:latest.version}});
+  assert.equal(approve.status,200);
+  const fileRecords = (await f.env.DB.prepare("SELECT data FROM records WHERE collection='files'").all()).results.map(row => JSON.parse(row.data));
+  assert.deepEqual(await disposeExpiredCertificates(f.env),{deleted:0,failed:0});
+  assert.equal((await (await getZip()).arrayBuffer()).byteLength > 0,true);
+
+  t.mock.timers.tick(1);
+  for (const entry of [earlier,latest]) {
+    const blocked = await f.call(`/files/${entry.files[0].id}?download=1`,{cookie:employee});
+    assert.equal(blocked.status,410);
+    assert.equal((await blocked.json()).code,'CERTIFICATE_RETENTION_ENDED');
+  }
+  assert.equal((await getZip()).status,410);
+  assert.equal((await submit(f.form())).status,410);
+  const adminUpload = f.form();
+  adminUpload.set('memberId','m1');
+  adminUpload.set('memberVersion','1');
+  adminUpload.set('courseVersion','1');
+  assert.equal((await f.call('/admin/certificate-import',{method:'POST',cookie:admin,body:adminUpload})).status,410);
+  const pending = await (await f.call('/me',{cookie:employee})).json();
+  assert.equal(pending.courses.find(item => item.id === 'c1').certificateUploadsClosed,true);
+  assert.ok(pending.submissions.filter(item => item.courseId === 'c1').every(item=>item.files.length === 0 && item.attachmentsPendingDisposal));
+
+  assert.deepEqual(await disposeExpiredCertificates(f.env),{deleted:2,failed:0});
+  assert.deepEqual(await disposeExpiredCertificates(f.env),{deleted:0,failed:0});
+  for (const file of fileRecords.filter(item => item.courseId === 'c1')) {
+    assert.equal(await f.env.FILES.head(file.key),null);
+    assert.equal((await f.call(`/files/${file.id}`,{cookie:admin})).status,404);
+  }
+  assert.equal((await f.call(`/files/${next.files[0].id}`,{cookie:employee})).status,200);
+  const data = await (await f.call('/admin/data',{cookie:admin})).json();
+  const disposed = data.submissions.find(item => item.id === latest.id);
+  assert.deepEqual(disposed.files,[]);
+  assert.equal(disposed.attachmentsDisposedAt,'2026-12-31T15:00:00.000Z');
+  assert.equal(disposed.completedOn,latest.completedOn);
+  assert.equal(getStatus(data.courses.find(item => item.id === 'c1'),data.members[0],data.submissions,data.overrides),'approved');
+  const audit = data.audit.filter(entry => entry.action === 'certificate_disposed');
+  assert.deepEqual(audit.map(entry => entry.detail.fileId).sort(),[earlier.files[0].id,latest.files[0].id].sort());
+  assert.ok(audit.every(entry => !('name' in entry.detail) && !('key' in entry.detail)));
+});
+
+test('disposal retries a storage error and a DB failure following a successful delete', async t => {
+  t.mock.timers.enable({apis:['Date'],now:new Date('2026-12-31T14:50:00Z')});
+  const f = await fixture(t);
+  f.env.certificateRetentionEnabled = true;
+  const cookie = await f.select();
+  const response = await f.call('/submissions',{method:'POST',cookie,body:f.form()});
+  assert.equal(response.status,201);
+  const {submission} = await response.json();
+  const file = JSON.parse((await f.env.DB.prepare("SELECT data FROM records WHERE collection='files'").first()).data);
+
+  t.mock.timers.tick(10 * 60 * 1000);
+  const remove = f.env.FILES.delete;
+  f.env.FILES.delete = async () => { throw new Error('Simulated storage outage'); };
+  assert.deepEqual(await disposeExpiredCertificates(f.env),{deleted:0,failed:1});
+  assert.ok(await f.env.FILES.head(file.key));
+  assert.deepEqual(await disposeExpiredCertificates(f.env),{deleted:0,failed:0});
+
+  t.mock.timers.tick(30 * 60 * 1000);
+  f.env.FILES.delete = remove;
+  const batch = f.env.DB.batch;
+  f.env.DB.batch = async () => { throw new Error('Simulated DB outage'); };
+  assert.deepEqual(await disposeExpiredCertificates(f.env),{deleted:0,failed:1});
+  assert.equal(await f.env.FILES.head(file.key),null);
+  assert.equal((await f.call(`/files/${file.id}`,{cookie})).status,410);
+
+  t.mock.timers.tick(30 * 60 * 1000);
+  f.env.DB.batch = batch;
+  assert.deepEqual(await disposeExpiredCertificates(f.env),{deleted:1,failed:0});
+  const data = await (await f.call('/me',{cookie})).json();
+  assert.deepEqual(data.submissions[0].files,[]);
+  assert.equal(data.submissions[0].id,submission.id);
+  assert.equal((await f.call(`/files/${file.id}`,{cookie})).status,404);
+});
 
 test('bootstrap hides private records and admin routes require server authentication',async t=>{
   const f=await fixture(t,{courses:[course('c1'),course('draft',{published:false}),course('old',{archived:true})],members:[member('m1',{legacyCompletions:['c1']}),member('left',{active:false})]});

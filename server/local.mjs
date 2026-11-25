@@ -6,6 +6,7 @@ import {pipeline} from 'node:stream/promises';
 import {createLocalEnvironment} from './local-storage.mjs';
 import {handleApi} from './api.mjs';
 import {publicAssets,staticPolicy} from './static-assets.mjs';
+import {runCertificateDisposal} from './certificate-disposal.mjs';
 
 const root=path.resolve(import.meta.dirname,'..');
 const allowed = new Set(publicAssets);
@@ -18,6 +19,7 @@ export async function startLocalServer({port=3198,host='127.0.0.1',dataDirectory
   if (!adminPassword || !sessionSecret) throw new Error('관리자 비밀번호와 세션 키를 .dev.vars 또는 환경변수로 설정해 주세요. docs/운영안내.md를 확인하세요.');
   seed ||= JSON.parse(await fs.readFile(path.join(root,'server/seed.json'),'utf8'));
   const env=await createLocalEnvironment({dataDirectory,adminPassword,sessionSecret,seed});
+  env.certificateRetentionEnabled = true;
   const server=http.createServer(async(req,res)=>{
     try {
       const origin=`http://${host==='0.0.0.0'?'localhost':host}:${server.address().port}`;
@@ -48,13 +50,26 @@ export async function startLocalServer({port=3198,host='127.0.0.1',dataDirectory
     }
   });
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,host,resolve);});
-  return {server,env,url:`http://${host}:${server.address().port}`,close:async()=>{await new Promise((resolve,reject)=>server.close(e=>e?reject(e):resolve()));env.DB.close();}};
+  let disposal;
+  function checkDisposal() {
+    disposal ??= runCertificateDisposal(env).catch(() => {
+      console.error('수료증 자동 파기 중 오류가 발생했습니다. 다음 실행에서 다시 처리합니다.');
+    }).finally(() => { disposal = null; });
+  }
+  const timer = env.certificateRetentionEnabled ? setInterval(checkDisposal, 30 * 60 * 1000).unref() : null;
+  if (timer) checkDisposal();
+  return {server,env,url:`http://${host}:${server.address().port}`,close:async()=>{
+    clearInterval(timer);
+    await new Promise((resolve,reject)=>server.close(e=>e?reject(e):resolve()));
+    await disposal;
+    env.DB.close();
+  }};
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===path.resolve(import.meta.filename)) {
   const portArg=process.argv.indexOf('--port');
   const instance=await startLocalServer({port:portArg>=0?Number(process.argv[portArg+1]):3198});
   console.log(`교육 관리 앱: ${instance.url}/edustatus_all.html`);
   console.log(`관리자 화면: ${instance.url}/edustatus_admin.html`);
-  console.log('데이터와 수료증은 .edu-data 폴더에 영구 보관됩니다. 종료: Ctrl+C');
+  console.log('데이터는 .edu-data 폴더에 저장됩니다. 수료증 첨부파일은 교육연도 말까지 보관합니다. 종료: Ctrl+C');
   for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>{void instance.close().then(()=>process.exit(0));});
 }

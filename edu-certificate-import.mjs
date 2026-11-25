@@ -36,7 +36,7 @@ export function initCertificateImport({getData, reloadData, viewStatus}) {
   function rowState(row) {
     if (row.saved || row.blocked) return null;
     const member = data.members.find(item => item.id === row.memberId && item.active);
-    const course = data.courses.find(item => item.id === row.courseId && item.published && !item.archived);
+    const course = data.courses.find(item => item.id === row.courseId && item.published && !item.archived && !item.certificateUploadsClosed);
     if (!member || !course || !row.date || row.date > today()) return {message:'부서원, 교육, 수료일(오늘까지)을 확인해 주세요.'};
     if (!isTarget(course, member)) return {message:'해당 부서원은 이 교육의 대상이 아니거나 면제되었습니다.'};
     const latest = getLatestSubmission(data.submissions, member.id, course.id);
@@ -63,7 +63,7 @@ export function initCertificateImport({getData, reloadData, viewStatus}) {
   function putRows() {
     const memberOptions = data.members.filter(member => member.active)
       .map(member => `<option value="${e(member.id)}">${e([member.name, member.team, member.position].filter(Boolean).join(' · '))}</option>`).join('');
-    const courseOptions = data.courses.filter(course => course.published && !course.archived)
+    const courseOptions = data.courses.filter(course => course.published && !course.archived && !course.certificateUploadsClosed)
       .map(course => `<option value="${e(course.id)}">${e(course.name)} · ${e(course.year)}년${course.periodType === 'year' ? '' : ` ${e(course.periodValue)}${course.periodType === 'month' ? '월' : '분기'}`}</option>`).join('');
     const previousBatchCourse = batchCourse.value;
     batchCourse.innerHTML = `<option value="">교육 선택</option>${courseOptions}`;

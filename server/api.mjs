@@ -1,5 +1,6 @@
 import {getLatestSubmission, getStatus, isTarget, MAX_FILE_BYTES, MAX_TOTAL_BYTES, MAX_FILES} from '../edu-shared.mjs';
 import {createZip} from './zip.mjs';
+import {certificateRetentionExpired, disposeSelectedAttachments} from './certificate-disposal.mjs';
 
 const encoder = new TextEncoder();
 const SESSION_SECONDS = 12 * 60 * 60;
@@ -253,6 +254,25 @@ function publicMember(member) {
 }
 function publicFile(file) { return {id:file.id, name:file.name, type:file.type, size:file.size}; }
 function visibleCourses(courses) { return courses.filter(course => course.published); }
+
+function certificateCourseView(course, expired) {
+  return expired ? {...course, certificateUploadsClosed:true} : course;
+}
+
+function certificateSubmissionView(submission, expired) {
+  const {manualDisposalId, ...visible} = submission;
+  return (expired || manualDisposalId) && visible.files?.length
+    ? {...visible, files:[], attachmentsPendingDisposal:true} : visible;
+}
+
+function expiredCertificateCourses(env, courses) {
+  const time = Date.now();
+  return new Set(courses.filter(course => certificateRetentionExpired(env, course, time)).map(course => course.id));
+}
+
+function requireCertificatePeriod(env, course) {
+  if (certificateRetentionExpired(env, course)) fail(410,'교육연도가 지나 수료증 첨부파일 보관이 종료되었습니다. 추가 제출은 담당자에게 문의해 주세요.','CERTIFICATE_RETENTION_ENDED');
+}
 function pairId(memberId, courseId) { return `${memberId}:${courseId}`; }
 
 function memberOrdering(members, saved) {
@@ -428,7 +448,7 @@ async function saveCourse(request, env, id) {
   } else {
     await env.DB.batch([insert(env,'courses',course),insert(env,'audit',auditItem(action,{courseId:course.id,name:course.name}))]);
   }
-  return json({course},existing ? 200 : 201);
+  return json({course:certificateCourseView(course,certificateRetentionExpired(env,course))},existing ? 200 : 201);
 }
 
 async function saveMember(request, env, id) {
@@ -533,6 +553,7 @@ async function submit(request, env, adminSession = null) {
   if (!member.active) fail(403,'재직 부서원의 수료증만 등록할 수 있습니다.');
   if (!course.published || course.archived) fail(403,'현재 제출을 받는 교육이 아닙니다.');
   if (!isTarget(course,member)) fail(403,adminSession ? '해당 부서원의 교육 대상 여부를 확인해 주세요.' : '본인에게 지정된 교육만 제출할 수 있습니다.');
+  requireCertificatePeriod(env,course);
   const completedOn = date(form.get('completedOn'),'수료일',true);
   if (completedOn > today()) fail(400,'수료일은 오늘 또는 이전 날짜로 입력해 주세요.');
   const comment = text(form.get('comment'),'제출 메모',2000);
@@ -584,6 +605,7 @@ async function submit(request, env, adminSession = null) {
         fail(503,'저장 과정에서 수료증 원본이 변경되었습니다. 저장소와 기관 보안 프로그램 설정을 담당자에게 확인해 주세요. 접수되지 않았습니다.','FILE_STORAGE_CHANGED');
       }
     }
+    requireCertificatePeriod(env,course);
     const results = await env.DB.batch([
       env.DB.prepare("UPDATE records SET data = ?, version = ? WHERE collection = 'enrollments' AND id = ? AND version = ? AND EXISTS (SELECT 1 FROM records WHERE collection = 'courses' AND id = ? AND version = ?) AND EXISTS (SELECT 1 FROM records WHERE collection = 'members' AND id = ? AND version = ?)").bind(stringify(next),next.version,enrollment.id,enrollment.version,course.id,course.version,member.id,member.version),
       guardedInsert(env,'submissions',submission,lock),
@@ -605,6 +627,7 @@ async function review(request, env, id) {
   if (version(body.version) !== submission.version) conflict();
   if (!['approved','needs_revision'].includes(body.status)) fail(400,'검토 결과를 확인해 주세요.');
   const reviewNote = text(body.reviewNote,'검토 사유',2000,body.status==='needs_revision');
+  const course = env.certificateRetentionEnabled ? await get(env,'courses',submission.courseId) : null;
   const enrollment = await ensureEnrollment(env,submission.memberId,submission.courseId);
   if (enrollment.latestSubmissionId !== submission.id) fail(409,'재제출된 새 수료증이 있습니다. 최신 제출본을 검토해 주세요.');
   const updated = {...submission,status:body.status,reviewNote,reviewedAt:now(),version:submission.version+1};
@@ -617,7 +640,18 @@ async function review(request, env, id) {
     guardedInsert(env,'audit',auditItem('submission_reviewed',{submissionId:id,courseId:submission.courseId,memberId:submission.memberId,status:updated.status,reviewNote}),lock)
   ]);
   if (!changes(results[0]) || !changes(results[1])) conflict();
-  return json({submission:updated});
+  return json({submission:certificateSubmissionView(updated,certificateRetentionExpired(env,course))});
+}
+
+async function disposeCertificates(request, env) {
+  const body = await readJson(request);
+  if (body.confirm !== true) fail(400,'파기할 제출본과 첨부파일을 확인해 주세요.');
+  if (!Array.isArray(body.submissions) || !body.submissions.length) fail(400,'파기할 제출본을 한 건 이상 선택해 주세요.');
+  const selections = body.submissions.map(item => ({id:cleanId(item?.id),version:version(item?.version)}));
+  if (new Set(selections.map(item => item.id)).size !== selections.length) fail(400,'같은 제출본이 중복 선택되었습니다.');
+  const result = await disposeSelectedAttachments(env,selections);
+  if (!result) conflict();
+  return json(result,result.pending ? 202 : 200);
 }
 
 async function override(request, env, memberId, courseId) {
@@ -664,6 +698,9 @@ async function fileResponse(request, env, fileId, url) {
     if (file.memberId !== member.id) fail(403,'본인의 제출 파일만 열람할 수 있습니다.');
     actor = {id:member.id,role:'member',identityAssurance:'name_selection_unverified'};
   }
+  if (file.disposalRequestId) fail(410,'관리자가 파기를 요청한 첨부파일입니다.','CERTIFICATE_DISPOSAL_PENDING');
+  if (file.disposalAttemptId) fail(410,'보관기간이 종료된 첨부파일입니다.','CERTIFICATE_RETENTION_ENDED');
+  if (env.certificateRetentionEnabled) requireCertificatePeriod(env,await get(env,'courses',file.courseId));
   const object = await env.FILES.get(file.key);
   if (!object && mayBePropagating(env,file)) filePropagating();
   if (!object) fail(404,'저장된 파일을 찾을 수 없습니다. 담당자에게 문의해 주세요.');
@@ -686,6 +723,7 @@ async function fileResponse(request, env, fileId, url) {
 async function zipResponse(request, env, courseId, url, adminSession) {
   const actor = {id:'admin',role:adminSession.role,identityAssurance:'shared_admin_password'};
   const course = await required(env,'courses',courseId);
+  requireCertificatePeriod(env,course);
   const scope = url.searchParams.get('scope') || 'approved';
   if (!['approved','latest'].includes(scope)) fail(400,'다운로드 범위를 확인해 주세요.');
   const [members,submissions,overrides,files] = await Promise.all(['members','submissions','overrides','files'].map(collection => all(env,collection)));
@@ -700,6 +738,7 @@ async function zipResponse(request, env, courseId, url, adminSession) {
     for (const [index,file] of latest.files.entries()) {
       const stored = fileMap.get(file.id);
       if (!stored) fail(409,`${member.name} 님의 파일 정보가 누락되었습니다. 담당자 확인이 필요합니다.`);
+      if (stored.disposalRequestId || stored.disposalAttemptId) continue;
       const head = await env.FILES.head(stored.key);
       if (!head && mayBePropagating(env,stored)) filePropagating();
       if (!head || Number(head.size)!==file.size) fail(409,`${member.name} 님의 수료증 파일이 누락되었거나 크기가 다릅니다. 일괄 다운로드를 중단했습니다.`);
@@ -780,7 +819,8 @@ async function route(request, env) {
   if (path==='/api/bootstrap' && request.method==='GET') {
     const [courses,members,selected,savedOrder,savedChart] = await Promise.all([all(env,'courses'),all(env,'members'),session(request,env,'member'),get(env,'settings','member-order'),get(env,'settings','department-chart')]);
     const ordered = memberOrdering(members,savedOrder);
-    return json({courses:visibleCourses(courses),members:ordered.members.filter(member=>member.active).map(publicMember),departmentChart:departmentChart(ordered.members,savedChart),selectedMemberId:members.some(member=>member.id===selected?.member_id && member.active) ? selected.member_id : null,serverTime:now()});
+    const expired = expiredCertificateCourses(env,courses);
+    return json({courses:visibleCourses(courses).map(course=>certificateCourseView(course,expired.has(course.id))),members:ordered.members.filter(member=>member.active).map(publicMember),departmentChart:departmentChart(ordered.members,savedChart),selectedMemberId:members.some(member=>member.id===selected?.member_id && member.active) ? selected.member_id : null,serverTime:now()});
   }
   if (path==='/api/member-session' && request.method==='POST') {
     const body = await readJson(request);
@@ -795,7 +835,8 @@ async function route(request, env) {
   if (path==='/api/me' && request.method==='GET') {
     const member = await requireMember(request,env);
     const [courses,submissions,overrides] = await Promise.all(['courses','submissions','overrides'].map(collection=>all(env,collection)));
-    return json({member,courses:visibleCourses(courses),submissions:submissions.filter(value=>value.memberId===member.id),overrides:overrides.filter(value=>value.memberId===member.id),serverTime:now()});
+    const expired = expiredCertificateCourses(env,courses);
+    return json({member,courses:visibleCourses(courses).map(course=>certificateCourseView(course,expired.has(course.id))),submissions:submissions.filter(value=>value.memberId===member.id).map(value=>certificateSubmissionView(value,expired.has(value.courseId))),overrides:overrides.filter(value=>value.memberId===member.id),serverTime:now()});
   }
   if (path==='/api/submissions' && request.method==='POST') return submit(request,env);
   let match = /^\/api\/files\/([\w:-]+)$/.exec(path);
@@ -812,7 +853,8 @@ async function route(request, env) {
     if (path==='/api/admin/data' && request.method==='GET') {
       const [courses,members,submissions,overrides,auditRows,savedOrder,savedChart] = await Promise.all([...['courses','members','submissions','overrides'].map(collection=>all(env,collection)),env.DB.prepare("SELECT data FROM records WHERE collection = 'audit' ORDER BY json_extract(data,'$.createdAt') DESC,id DESC LIMIT 500").all(),get(env,'settings','member-order'),get(env,'settings','department-chart')]);
       const ordered = memberOrdering(members,savedOrder);
-      return json({courses,members:ordered.members,memberOrder:ordered.memberOrder,departmentChart:departmentChart(ordered.members,savedChart),submissions,overrides,audit:auditRows.results.map(row=>JSON.parse(row.data)),serverTime:now()});
+      const expired = expiredCertificateCourses(env,courses);
+      return json({courses:courses.map(course=>certificateCourseView(course,expired.has(course.id))),members:ordered.members,memberOrder:ordered.memberOrder,departmentChart:departmentChart(ordered.members,savedChart),submissions:submissions.map(value=>certificateSubmissionView(value,expired.has(value.courseId))),overrides,audit:auditRows.results.map(row=>JSON.parse(row.data)),serverTime:now()});
     }
     if (path==='/api/admin/member-order' && request.method==='PUT') return saveMemberOrder(request,env);
     if (path==='/api/admin/department-chart' && request.method==='PUT') return saveDepartmentChart(request,env);
@@ -835,6 +877,7 @@ async function route(request, env) {
     if (match && request.method==='PUT') return saveMember(request,env,match[1]);
     match = /^\/api\/admin\/submissions\/([\w:-]+)\/review$/.exec(path);
     if (match && request.method==='POST') return review(request,env,match[1]);
+    if (path==='/api/admin/certificate-disposal' && request.method==='POST') return disposeCertificates(request,env);
     match = /^\/api\/admin\/overrides\/([\w-]+)\/([\w-]+)$/.exec(path);
     if (match && request.method==='PUT') return override(request,env,match[1],match[2]);
     match = /^\/api\/admin\/courses\/([\w:-]+)\/download$/.exec(path);

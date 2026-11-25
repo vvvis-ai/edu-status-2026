@@ -3,7 +3,7 @@ import {
   openDialog, closeDialog, statusBadge, fetchStoredFile,
 } from './edu-client.mjs';
 import {
-  getLatestSubmission, getStatus, getProgress, matchesPeriod, isNewCourse,
+  getLatestSubmission, getStatus, getProgress, matchesPeriod, isNewCourse, attachmentDisposalLabel,
   MAX_FILE_BYTES, MAX_TOTAL_BYTES, MAX_FILES, FILE_ACCEPT,
 } from './edu-shared.mjs';
 import {departmentMarkup} from './edu-department.mjs';
@@ -148,7 +148,7 @@ function renderCourse(course) {
   const status = personalStatus(course);
   const latest = getLatestSubmission(state.me.submissions || [], state.me.member.id, course.id);
   const link = safeLink(course.url);
-  const canSubmit = !course.archived && ['not_submitted', 'pending', 'needs_revision'].includes(status);
+  const canSubmit = !course.archived && !course.certificateUploadsClosed && ['not_submitted', 'pending', 'needs_revision'].includes(status);
   const submitLabel = status === 'needs_revision' ? '보완하여 다시 제출' : status === 'pending' ? '수료증 다시 제출' : '수료증 제출';
   const details = Array.isArray(course.details) ? course.details : [];
   return `<article class="course-card" data-course-id="${esc(course.id)}">
@@ -160,8 +160,9 @@ function renderCourse(course) {
     ${status === 'needs_revision' && latest?.reviewNote ? `<div class="revision-note"><strong>담당자 보완 요청</strong><br>${esc(latest.reviewNote)}</div>` : ''}
     ${status === 'exempt' ? '<p class="notice">이 교육은 면제 처리되어 제출하지 않아도 됩니다.</p>' : ''}
     ${course.archived ? '<p class="notice">보관된 교육입니다. 교육 안내와 제출·검토 이력을 확인할 수 있습니다.</p>' : ''}
+    ${course.certificateUploadsClosed && !latest ? '<p class="muted">교육연도가 지나 첨부파일 제출이 종료되었습니다.</p>' : ''}
     <div class="course-actions">${link ? `<a class="button secondary" href="${esc(link)}" target="_blank" rel="noopener noreferrer">수강하러 가기 ↗</a>` : ''}${canSubmit ? `<button type="button" class="button primary" data-upload-course="${esc(course.id)}">${submitLabel}</button>` : ''}<button type="button" class="button ghost" data-history-course="${esc(course.id)}">제출·검토 이력</button></div>
-    ${latest ? `<div class="submission-receipt">최근 접수 ${esc(formatTime(latest.submittedAt))} · 수료일 ${esc(formatDate(latest.completedOn))} · 파일 ${latest.files?.length || 0}개${latest.reviewedAt ? `<br>검토 ${esc(formatTime(latest.reviewedAt))}` : ''}</div>` : status === 'approved' ? '<div class="submission-receipt">담당자가 확인한 기존 이수 내역입니다.</div>' : ''}
+    ${latest ? `<div class="submission-receipt">최근 접수 ${esc(formatTime(latest.submittedAt))} · 수료일 ${esc(formatDate(latest.completedOn))} · ${esc(attachmentDisposalLabel(latest) || `파일 ${latest.files?.length || 0}개`)}${latest.reviewedAt ? `<br>검토 ${esc(formatTime(latest.reviewedAt))}` : ''}</div>` : status === 'approved' ? '<div class="submission-receipt">담당자가 확인한 기존 이수 내역입니다.</div>' : ''}
   </article>`;
 }
 
@@ -174,7 +175,7 @@ function showUploadError(message) { $('uploadError').textContent = message; $('u
 
 function openUpload(courseId) {
   const course = state.me?.courses.find((item) => item.id === courseId);
-  if (!course || course.archived || !['not_submitted', 'pending', 'needs_revision'].includes(personalStatus(course))) return;
+  if (!course || course.archived || course.certificateUploadsClosed || !['not_submitted', 'pending', 'needs_revision'].includes(personalStatus(course))) return;
   releaseFiles(); state.uploadCourse = course;
   $('uploadForm').reset(); showUploadError(''); $('uploadProgress').hidden = true;
   $('uploadCourseName').textContent = `${state.me.member.name} · ${course.name}`;
@@ -284,7 +285,11 @@ function openHistory(courseId) {
   const override = (state.me.overrides || []).find((item) => item.courseId === courseId && item.memberId === state.me.member.id);
   let html = override ? `<div class="notice"><strong>담당자 처리</strong> ${statusBadge(override.status)}<p>${esc(override.reason)}</p><small>${esc(formatTime(override.updatedAt))}</small></div>` : '';
   if (!entries.length) html += `<div class="empty-state">${personalStatus(course) === 'approved' ? '담당자가 확인한 기존 이수 내역입니다. 등록된 수료증 파일은 없습니다.' : '아직 제출한 수료증이 없습니다.'}</div>`;
-  else html += entries.map((entry, index) => `<article class="history-entry"><div class="row">${statusBadge(entry.status)}${index === 0 ? '<span class="badge info">최근 제출</span>' : ''}</div><p><strong>접수</strong> ${esc(formatTime(entry.submittedAt))}<br><strong>수료일</strong> ${esc(formatDate(entry.completedOn))}</p>${entry.comment ? `<p class="description-text"><strong>전달 내용</strong><br>${esc(entry.comment)}</p>` : ''}${entry.reviewedAt ? `<p class="muted">검토 ${esc(formatTime(entry.reviewedAt))}</p>` : ''}${entry.reviewNote ? `<div class="${entry.status === 'needs_revision' ? 'revision-note' : 'notice'}"><strong>담당자 검토 의견</strong><br>${esc(entry.reviewNote)}</div>` : ''}<div class="history-files">${(entry.files || []).map((file) => `<button type="button" class="button secondary" data-preview-saved="${esc(file.id)}">${esc(file.name)} · ${esc(formatBytes(file.size))}</button>`).join('')}</div></article>`).join('');
+  else html += entries.map((entry, index) => {
+    const disposalLabel = attachmentDisposalLabel(entry);
+    const attachments = disposalLabel ? `<p class="muted">${esc(disposalLabel)}</p>` : (entry.files || []).map(file => `<button type="button" class="button secondary" data-preview-saved="${esc(file.id)}">${esc(file.name)} · ${esc(formatBytes(file.size))}</button>`).join('');
+    return `<article class="history-entry"><div class="row">${statusBadge(entry.status)}${index === 0 ? '<span class="badge info">최근 제출</span>' : ''}</div><p><strong>접수</strong> ${esc(formatTime(entry.submittedAt))}<br><strong>수료일</strong> ${esc(formatDate(entry.completedOn))}</p>${entry.comment ? `<p class="description-text"><strong>전달 내용</strong><br>${esc(entry.comment)}</p>` : ''}${entry.reviewedAt ? `<p class="muted">검토 ${esc(formatTime(entry.reviewedAt))}</p>` : ''}${entry.reviewNote ? `<div class="${entry.status === 'needs_revision' ? 'revision-note' : 'notice'}"><strong>담당자 검토 의견</strong><br>${esc(entry.reviewNote)}</div>` : ''}<div class="history-files">${attachments}</div></article>`;
+  }).join('');
   $('historyContent').innerHTML = html; openDialog($('historyDialog'));
 }
 

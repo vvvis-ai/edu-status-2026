@@ -15,7 +15,7 @@ export function findCertificateMatch(fields, {courses, members}) {
   const title = courseTitle(fields.course);
   const parts = (fields.course || '').split(' / ').map(courseTitle);
   const year = Number(fields.date?.slice(0, 4));
-  const seats = courses.filter(course => course.published && !course.archived && (!year || Number(course.year) === year));
+  const seats = courses.filter(course => course.published && !course.archived && !course.certificateUploadsClosed && (!year || Number(course.year) === year));
   const matches = [];
   if (title) {
     for (const course of seats) {

@@ -6,7 +6,8 @@ import { startLocalServer } from '../server/local.mjs';
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nGkAAAAASUVORK5CYII=', 'base64');
 const timestamp = '2026-01-01T00:00:00.000Z';
-const course = { id: 'local-course', name: '가상 로컬 교육', site: '가상교육원', url: 'https://example.com', deadline: '2026-12-31', submissionDeadline: '2026-12-20', year: 2026, periodType: 'year', periodValue: 0, details: ['가상 필수 과정'], requirement: 'all', requirementNote: '', requestDepartment: '가상부서', description: '', published: true, archived: false, targetMode: 'all', targetMemberIds: [], exemptMemberIds: [], createdAt: timestamp, updatedAt: timestamp, version: 1 };
+const educationYear = new Date(Date.now() + 9 * 60 * 60 * 1000).getUTCFullYear();
+const course = { id: 'local-course', name: '가상 로컬 교육', site: '가상교육원', url: 'https://example.com', deadline: `${educationYear}-12-31`, submissionDeadline: `${educationYear}-12-20`, year: educationYear, periodType: 'year', periodValue: 0, details: ['가상 필수 과정'], requirement: 'all', requirementNote: '', requestDepartment: '가상부서', description: '', published: true, archived: false, targetMode: 'all', targetMemberIds: [], exemptMemberIds: [], createdAt: timestamp, updatedAt: timestamp, version: 1 };
 const member = { id: 'local-member', name: '가상직원', position: '가상직급', team: '가상팀', active: true, joinedOn: '', leftOn: '', note: '공개하지 않는 가상 메모', legacyCompletions: [], createdAt: timestamp, updatedAt: timestamp, version: 1 };
 
 async function fixture(t) {

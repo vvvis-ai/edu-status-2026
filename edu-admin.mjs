@@ -4,7 +4,7 @@ import {
 } from './edu-client.mjs';
 import {
   getLatestSubmission, getStatus, getProgress, matchesPeriod,
-  isNewCourse, STATUS_LABELS,
+  isNewCourse, STATUS_LABELS, attachmentDisposalLabel,
 } from './edu-shared.mjs';
 import {departmentMarkup} from './edu-department.mjs';
 import {initCertificateImport} from './edu-certificate-import.mjs';
@@ -29,6 +29,7 @@ let departmentChartDraft = null;
 let departmentChartVersion = 0;
 let departmentActiveIds = [];
 let departmentChartBusy = false;
+let certificateDisposal = null;
 let loading = false;
 let fileAccess = {entries:[],nextCursor:null,fileId:'',loaded:false,loading:false,error:''};
 
@@ -117,10 +118,102 @@ function renderReview() {
   }).sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));
   $('#reviewTableBody').innerHTML = rows.map(submission => {
     const member = data.members.find(item => item.id === submission.memberId);
-    return `<tr><td><strong>${e(member?.name || '이름 미상')}</strong><span class="subline">${e([member?.team, member?.position].filter(Boolean).join(' · ') || '팀·직급 미등록')}</span></td><td class="course-title"><strong>${e(courseName(submission.courseId))}</strong><span class="subline">수료일 ${formatDate(submission.completedOn)}</span></td><td>${formatTime(submission.submittedAt)}</td><td>${submission.files.length}개</td><td>${statusBadge(submission.status)}</td><td><button type="button" class="button secondary" data-review="${e(submission.id)}">${submission.status === 'pending' ? '검토하기' : '내역 보기'}</button></td></tr>`;
+    return `<tr><td><strong>${e(member?.name || '이름 미상')}</strong><span class="subline">${e([member?.team, member?.position].filter(Boolean).join(' · ') || '팀·직급 미등록')}</span></td><td class="course-title"><strong>${e(courseName(submission.courseId))}</strong><span class="subline">수료일 ${formatDate(submission.completedOn)}</span></td><td>${formatTime(submission.submittedAt)}</td><td>${e(attachmentDisposalLabel(submission) || `${submission.files.length}개`)}</td><td>${statusBadge(submission.status)}</td><td><button type="button" class="button secondary" data-review="${e(submission.id)}">${submission.status === 'pending' ? '검토하기' : '내역 보기'}</button></td></tr>`;
   }).join('');
   $('#reviewEmpty').hidden = rows.length > 0;
 }
+
+function disposalRowsInView() {
+  const courseId = $('#certificateDisposalCourse').value;
+  return certificateDisposal.rows.filter(row => !courseId || row.courseId === courseId);
+}
+
+function openCertificateDisposal() {
+  const courses = new Map(periodCourses().map(course => [course.id,course]));
+  const members = new Map(data.members.map(member => [member.id,member]));
+  const latest = new Set(latestSubmissions().map(submission => submission.id));
+  const rows = [];
+  for (const submission of data.submissions) {
+    const course = courses.get(submission.courseId), member = members.get(submission.memberId);
+    if (!course || !submission.files?.length || !includesQuery(member?.name,member?.team,course.name,course.requestDepartment)) continue;
+    rows.push({id:submission.id, version:submission.version, courseId:course.id, courseName:course.name,
+      memberName:member?.name || '이름 미상', memberTeam:member?.team || '', submittedAt:submission.submittedAt,
+      previous:!latest.has(submission.id), status:submission.status, fileCount:submission.files.length});
+  }
+  rows.sort((left,right) => right.submittedAt.localeCompare(left.submittedAt) || left.memberName.localeCompare(right.memberName,'ko'));
+  certificateDisposal = {rows, selected:new Set(), confirming:false, busy:false};
+  const usedCourses = new Set(rows.map(row => row.courseId));
+  $('#certificateDisposalCourse').innerHTML = '<option value="">조회 범위 전체 교육</option>' +
+    [...courses.values()].filter(course => usedCourses.has(course.id)).map(course => `<option value="${e(course.id)}">${e(course.name)}</option>`).join('');
+  setError($('#certificateDisposalError'), '');
+  renderCertificateDisposal();
+  openDialog($('#certificateDisposalDialog'));
+}
+
+function renderCertificateDisposal() {
+  const {rows, selected, confirming, busy:processing} = certificateDisposal;
+  const chosen = rows.filter(row => selected.has(row.id));
+  const visible = confirming ? chosen : disposalRowsInView();
+  const selectedInView = visible.filter(row => selected.has(row.id)).length;
+  const fileCount = chosen.reduce((total,row) => total + row.fileCount,0);
+  $('#certificateDisposalScope').textContent = confirming
+    ? '아래 제출본에 첨부된 PDF와 사진 전체가 파기됩니다.'
+    : `${periodOptions().year}년 현재 조회 범위의 제출본입니다. 검토 상태와 관계없이 이전 제출본도 선택할 수 있습니다.`;
+  $('#certificateDisposalCount').textContent = `제출본 ${chosen.length}건 선택 · 첨부파일 ${fileCount}개`;
+  $('#certificateDisposalFilters').hidden = confirming;
+  $('#certificateDisposalSelectionHead').hidden = confirming;
+  const selectAll = $('#selectAllCertificateDisposal');
+  selectAll.disabled = !visible.length || processing;
+  selectAll.checked = visible.length > 0 && selectedInView === visible.length;
+  selectAll.indeterminate = selectedInView > 0 && selectedInView < visible.length;
+  $('#certificateDisposalRows').innerHTML = visible.map(row => `<tr>
+    ${confirming ? '' : `<td><input type="checkbox" value="${e(row.id)}" aria-label="${e(`${row.memberName} ${row.courseName} ${formatTime(row.submittedAt)} 제출본 선택`)}" ${selected.has(row.id) ? 'checked' : ''}></td>`}
+    <td><strong>${e(row.memberName)}</strong><span class="subline">${e(row.memberTeam)}</span></td><td>${e(row.courseName)}</td>
+    <td>${e(formatTime(row.submittedAt))}<span class="subline">${row.previous ? '이전 제출본' : '최신 제출본'} · ${e(statusLabel(row.status))}</span></td><td>${row.fileCount}개</td>
+  </tr>`).join('');
+  $('#certificateDisposalEmpty').hidden = visible.length > 0;
+  $('#certificateDisposalWarning').hidden = !confirming;
+  const back = $('#backCertificateDisposalButton'), submit = $('#submitCertificateDisposalButton');
+  back.hidden = !confirming;
+  back.disabled = processing;
+  $('#cancelCertificateDisposalButton').disabled = processing;
+  $('#closeCertificateDisposalButton').disabled = processing;
+  submit.disabled = processing || !chosen.length;
+  submit.textContent = processing ? '파기 처리 중…' : confirming ? `${fileCount}개 첨부파일 파기` : '파기 대상 확인';
+}
+
+async function submitCertificateDisposal(event) {
+  event.preventDefault();
+  const state = certificateDisposal;
+  if (!state || state.busy || !state.selected.size) return;
+  setError($('#certificateDisposalError'), '');
+  if (!state.confirming) {
+    state.confirming = true;
+    renderCertificateDisposal();
+    $('#backCertificateDisposalButton').focus();
+    return;
+  }
+  state.busy = true;
+  renderCertificateDisposal();
+  try {
+    const submissions = state.rows.filter(row => state.selected.has(row.id)).map(({id,version}) => ({id,version}));
+    const result = await api('/admin/certificate-disposal',{method:'POST',body:{confirm:true,submissions}});
+    closeDialog($('#certificateDisposalDialog'));
+    showToast(result.pending ? `첨부파일 ${result.deleted}개 파기 완료. ${result.pending}개는 예약 작업에서 처리합니다.` : `첨부파일 ${result.deleted}개를 파기했습니다.`);
+    await loadData().catch(() => {});
+  } catch (error) {
+    if (error.code === 'VERSION_CONFLICT') {
+      await loadData().then(openCertificateDisposal).catch(() => {});
+    }
+    setError($('#certificateDisposalError'),error.message);
+  } finally {
+    if (certificateDisposal === state && $('#certificateDisposalDialog').open) {
+      state.busy = false;
+      renderCertificateDisposal();
+    }
+  }
+}
+
 function renderCourses() {
   const visibility = $('#courseVisibilityFilter').value;
   const rows = periodCourses().filter(course => {
@@ -133,7 +226,8 @@ function renderCourses() {
   $('#courseTableBody').innerHTML = rows.map(course => {
     const targets = data.members.filter(member => member.active && !['exempt', 'not_target'].includes(getStatus(course, member, data.submissions, data.overrides)));
     const approved = targets.filter(member => getStatus(course, member, data.submissions, data.overrides) === 'approved').length;
-    return `<tr><td class="course-title"><strong>${e(course.name)} ${isNewCourse(course) ? '<span class="badge info">NEW</span>' : ''}</strong><span class="subline">${e(course.requestDepartment || '요청부서 미등록')} · ${e(course.site || '사이트명 미등록')}</span></td><td>${e(periodLabel(course))}</td><td>${formatDate(course.deadline)}<span class="subline">제출 ${formatDate(course.submissionDeadline)}</span></td><td>${visibilityBadge(course)}</td><td>${approved} / ${targets.length}명</td><td><div class="actions-cell"><button type="button" class="button secondary" data-course-edit="${e(course.id)}">수정</button><button type="button" class="button ghost" data-course-copy="${e(course.id)}">복제</button><button type="button" class="button ghost" data-course-download="${e(course.id)}">ZIP</button></div></td></tr>`;
+    const zip = course.certificateUploadsClosed ? '<span class="muted">파일 보관 종료</span>' : `<button type="button" class="button ghost" data-course-download="${e(course.id)}">ZIP</button>`;
+    return `<tr><td class="course-title"><strong>${e(course.name)} ${isNewCourse(course) ? '<span class="badge info">NEW</span>' : ''}</strong><span class="subline">${e(course.requestDepartment || '요청부서 미등록')} · ${e(course.site || '사이트명 미등록')}</span></td><td>${e(periodLabel(course))}</td><td>${formatDate(course.deadline)}<span class="subline">제출 ${formatDate(course.submissionDeadline)}</span></td><td>${visibilityBadge(course)}</td><td>${approved} / ${targets.length}명</td><td><div class="actions-cell"><button type="button" class="button secondary" data-course-edit="${e(course.id)}">수정</button><button type="button" class="button ghost" data-course-copy="${e(course.id)}">복제</button>${zip}</div></td></tr>`;
   }).join('');
   $('#courseEmpty').hidden = rows.length > 0;
 }
@@ -308,6 +402,8 @@ function renderStatus() {
 }
 const auditActions = {
   certificate_access_requested:'파일 접근 요청 접수', certificates_downloaded:'ZIP 요청 집계',
+  certificate_disposed:'첨부파일 자동 파기',
+  certificate_manual_disposal_requested:'첨부파일 일괄 파기 요청', certificate_manually_disposed:'첨부파일 수동 파기 완료',
   certificate_submitted:'수료증 제출', certificate_imported:'수료증 일괄 등록', submission_reviewed:'수료증 검토',
   course_created:'교육 등록', course_updated:'교육 수정', member_created:'부서원 등록', member_updated:'부서원 수정',
   member_order_updated:'이름 순서 변경', department_chart_updated:'조직도 변경',
@@ -316,6 +412,7 @@ const auditActions = {
 
 function auditActor(entry) {
   const detail = entry.detail || {};
+  if (entry.actor === 'system') return {label:'시스템',assurance:'자동 파기'};
   const role = detail.actorRole || (entry.actor === 'admin' ? 'admin' : 'member');
   if (role === 'admin') return {label:'관리자 공용',assurance:detail.identityAssurance === 'shared_admin_password' ? '공용 비밀번호 · 개인 식별 불가' : '관리자 작업 · 개인 식별 불가'};
   const selected = data.members.find(member => member.id === entry.actor);
@@ -323,8 +420,11 @@ function auditActor(entry) {
 }
 
 function renderAudit() {
-  const filesOnly = $('#auditTypeFilter').value === 'files';
-  const source = filesOnly ? fileAccess.entries : data.audit;
+  const filter = $('#auditTypeFilter').value;
+  const filesOnly = filter === 'files';
+  const disposalOnly = filter === 'disposal';
+  const source = filesOnly ? fileAccess.entries : disposalOnly
+    ? data.audit.filter(entry => ['certificate_disposed','certificate_manual_disposal_requested','certificate_manually_disposed'].includes(entry.action)) : data.audit;
   const rows = source.filter(entry => {
     const detail = entry.detail || {};
     const owner = data.members.find(member => member.id === detail.memberId);
@@ -336,7 +436,8 @@ function renderAudit() {
   setError($('#fileAccessError'),filesOnly ? fileAccess.error : '');
   $('#auditScope').textContent = filesOnly
     ? fileAccess.loading ? '파일 요청 기록을 불러오고 있습니다…' : `파일 요청 ${fileAccess.entries.length}건 불러옴 · 현재 검색 결과 ${rows.length}건. ‘더 보기’로 이전 기록을 계속 조회할 수 있습니다.`
-    : `전체 감사 기록 중 최근 최대 500건에서 ${rows.length}건을 표시합니다. 이전 파일 요청은 ‘파일 열람·다운로드 요청’에서 조회하세요.`;
+    : disposalOnly ? `최근 감사 기록에서 파기 요청·결과 ${rows.length}건을 표시합니다.`
+      : `전체 감사 기록 중 최근 최대 500건에서 ${rows.length}건을 표시합니다. 이전 파일 요청은 ‘파일 열람·다운로드 요청’에서 조회하세요.`;
   $('#auditTableBody').innerHTML = rows.map(entry => {
     const detail = entry.detail || {};
     const owner = data.members.find(member => member.id === detail.memberId);
@@ -344,6 +445,9 @@ function renderAudit() {
     const isFile = entry.action === 'certificate_access_requested';
     const mode = {preview:'미리보기',download:'개별 내려받기',zip:'ZIP 포함 파일'}[detail.accessMode];
     const operation = auditActions[entry.action] || '기타 관리 작업';
+    if (entry.action === 'certificate_manual_disposal_requested') {
+      return `<tr><td>${e(formatTime(entry.createdAt))}</td><td><strong>${e(operation)}</strong></td><td>제출본 ${e(detail.submissionCount)}건 · 첨부파일 ${e(detail.fileCount)}개</td><td><strong>${e(actor.label)}</strong><span class="subline">${e(actor.assurance)}</span></td><td class="audit-identifiers"><strong>요청 ID</strong><span>${e(detail.requestId)}</span></td></tr>`;
+    }
     if (entry.action === 'course_exemptions_updated') {
       const changes = detail.changes || [];
       return `<tr><td>${e(formatTime(entry.createdAt))}</td><td><strong>${e(operation)}</strong><span class="subline">${changes.length}개 교육</span></td><td><strong>${e(owner?.name || '부서원 미상')}</strong>${changes.map(change => `<span class="subline">${e(courseName(change.courseId))} · ${change.exempt ? '면제 추가' : '면제 해제'}</span>`).join('')}</td><td><strong>${e(actor.label)}</strong><span class="subline">${e(actor.assurance)}</span></td><td>—</td></tr>`;
@@ -625,7 +729,7 @@ async function saveMemberExemptions(event) {
 function submissionHistory(memberId, courseId, selectedId = null) {
   const history = data.submissions.filter(submission => submission.memberId === memberId && submission.courseId === courseId).sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));
   if (!history.length) return '<p class="muted">제출 이력이 없습니다.</p>';
-  return `<ul class="history-list">${history.map(submission => `<li><button type="button" data-review="${e(submission.id)}">${formatTime(submission.submittedAt)} · 첨부 ${submission.files.length}개${submission.id === selectedId ? ' · 현재 보는 제출' : ''}</button> ${statusBadge(submission.status)}${submission.reviewNote ? `<p>검토: ${e(submission.reviewNote)}</p>` : ''}</li>`).join('')}</ul>`;
+  return `<ul class="history-list">${history.map(submission => `<li><button type="button" data-review="${e(submission.id)}">${formatTime(submission.submittedAt)} · ${e(attachmentDisposalLabel(submission) || `첨부 ${submission.files.length}개`)}${submission.id === selectedId ? ' · 현재 보는 제출' : ''}</button> ${statusBadge(submission.status)}${submission.reviewNote ? `<p>검토: ${e(submission.reviewNote)}</p>` : ''}</li>`).join('')}</ul>`;
 }
 function openReview(id) {
   const submission = data.submissions.find(item => item.id === id);
@@ -640,8 +744,8 @@ function openReview(id) {
     ${!latest ? '<p class="soft-note">이전 제출본입니다. 최신 제출본에서 검토 결과를 변경할 수 있습니다.</p>' : ''}
     <div class="review-grid"><div>
       <div class="file-tabs">${submission.files.map((file, index) => `<button type="button" class="file-tab ${index ? '' : 'active'}" data-preview-file="${e(file.id)}" title="${e(file.name)}">${e(file.name)} · ${formatBytes(file.size)}</button>`).join('')}</div>
-      <div id="filePreview" class="file-preview"><div class="empty-state">첨부 파일이 없습니다.</div></div>
-      <div id="fileDownloadActions" class="file-download"></div><p class="preview-note">미리보기가 표시되지 않으면 파일을 내려받아 확인하세요. DRM 파일은 제출자에게 기관에서 허용하는 절차로 보안 해제 후 재제출하도록 요청할 수 있습니다.</p>
+      <div id="filePreview" class="file-preview"><div class="empty-state">${e(attachmentDisposalLabel(submission) || '첨부 파일이 없습니다.')}</div></div>
+      <div id="fileDownloadActions" class="file-download"></div>${submission.files.length ? '<p class="preview-note">미리보기가 표시되지 않으면 파일을 내려받아 확인하세요. DRM 파일은 제출자에게 기관에서 허용하는 절차로 보안 해제 후 재제출하도록 요청할 수 있습니다.</p>' : ''}
     </div><div class="review-sidebar">
       <h3>제출 내용</h3><div class="review-comment">수료일: ${formatDate(submission.completedOn)}\n${e(submission.comment || '추가 메모가 없습니다.')}</div>
       ${latest ? `<form id="reviewForm"><div class="field"><label for="reviewDecision">검토 결과</label><select id="reviewDecision" name="status"><option value="approved">승인 · 이수 완료</option><option value="needs_revision" ${submission.status === 'needs_revision' ? 'selected' : ''}>보완 요청</option></select></div><div class="field"><label for="reviewNote">검토 메모 / 보완 사유</label><textarea id="reviewNote" name="reviewNote" rows="4" maxlength="2000" placeholder="보완 요청 시 필요한 내용을 입력하세요.">${e(submission.reviewNote || '')}</textarea></div><p id="reviewError" class="field-error" role="alert" hidden></p><button id="saveReviewButton" class="button primary" type="submit" style="width:100%;margin-top:10px">검토 결과 저장</button></form>` : ''}
@@ -710,7 +814,7 @@ function openRecord(memberId, courseId) {
   $('#recordDialogBody').innerHTML = `<p style="margin-top:0"><strong>${e(course.name)}</strong></p><div class="review-meta">${statusBadge(status)}<span>${e(member.team || member.position || '')}</span></div>
     ${legacy ? '<p class="soft-note">이전 대시보드에서 확인한 이수 기록이 보존되어 있습니다. 수료증 첨부는 없는 기존 기록입니다.</p>' : ''}
     ${override ? `<p class="soft-note">담당자 수동 처리: ${e(statusLabel(override.status))}<br>사유: ${e(override.reason)}<br>${formatTime(override.updatedAt)}</p>` : ''}
-    ${latest ? `<button type="button" class="button secondary" data-review="${e(latest.id)}">최신 수료증 ${latest.files.length}개 확인</button>` : '<p class="muted">첨부된 수료증이 없습니다.</p>'}
+    ${latest ? `<button type="button" class="button secondary" data-review="${e(latest.id)}">${attachmentDisposalLabel(latest) ? '최신 제출 기록 보기' : `최신 수료증 ${latest.files.length}개 확인`}</button>` : '<p class="muted">첨부된 수료증이 없습니다.</p>'}
     <details style="margin-top:22px"><summary><strong>담당자 수동 처리</strong></summary><p class="form-help">별도로 확인한 이수 내역이나 예외를 사유와 함께 기록합니다. 수료증을 새로 제출하거나 검토하면 해당 제출 결과가 반영됩니다.</p>
       <form id="overrideForm" class="stack" style="margin-top:14px"><div class="field"><label for="overrideStatus">처리 구분</label><select id="overrideStatus" name="status"><option value="approved">이수 완료로 처리</option><option value="not_submitted">미제출 상태로 처리</option><option value="exempt">이 교육 면제</option>${override ? '<option value="clear">수동 처리 해제 · 원래 기록 적용</option>' : ''}</select></div><div class="field"><label for="overrideReason">처리 사유 *</label><textarea id="overrideReason" name="reason" rows="3" required maxlength="2000" placeholder="확인 경위나 예외 사유를 기록하세요."></textarea></div><p id="overrideError" class="field-error" role="alert" hidden></p><button id="saveOverrideButton" type="submit" class="button primary">수동 처리 저장</button></form>
     </details><h3 style="font-size:14px;margin-top:25px">제출 이력</h3>${submissionHistory(memberId, courseId)}`;
@@ -851,6 +955,37 @@ $('#memberExemptionList').addEventListener('change', event => {
 $('#memberExemptionDialog').addEventListener('cancel', event => { if (memberExemptions?.busy) event.preventDefault(); });
 $('#memberExemptionDialog').addEventListener('close', () => { if (!$('#memberExemptionDialog').open) memberExemptions = null; });
 $('#downloadForm').addEventListener('submit', downloadZip);
+$('#openCertificateDisposalButton').addEventListener('click', openCertificateDisposal);
+$('#certificateDisposalCourse').addEventListener('change', renderCertificateDisposal);
+$('#selectAllCertificateDisposal').addEventListener('change', event => {
+  const {selected} = certificateDisposal;
+  for (const row of disposalRowsInView()) {
+    if (event.target.checked) selected.add(row.id);
+    else selected.delete(row.id);
+  }
+  renderCertificateDisposal();
+});
+$('#certificateDisposalRows').addEventListener('change', event => {
+  const {selected} = certificateDisposal;
+  const {value,checked} = event.target;
+  if (checked) selected.add(value);
+  else selected.delete(value);
+  renderCertificateDisposal();
+  $$('#certificateDisposalRows input').find(input => input.value === value)?.focus();
+});
+$('#backCertificateDisposalButton').addEventListener('click', () => {
+  certificateDisposal.confirming = false;
+  renderCertificateDisposal();
+  $('#certificateDisposalCourse').focus();
+});
+$('#certificateDisposalDialog').addEventListener('cancel', event => { if (certificateDisposal?.busy) event.preventDefault(); });
+$('#certificateDisposalDialog').addEventListener('close', () => {
+  if (!$('#certificateDisposalDialog').open) {
+    certificateDisposal = null;
+    $('#certificateDisposalRows').replaceChildren();
+  }
+});
+$('#certificateDisposalForm').addEventListener('submit', submitCertificateDisposal);
 $('#exportExcelButton').addEventListener('click', exportExcel);
 $('#coursePeriodType').addEventListener('change', () => updateCoursePeriod());
 $('#courseTargetMode').addEventListener('change', () => { $('#targetMembersField').hidden = $('#courseTargetMode').value !== 'selected'; });

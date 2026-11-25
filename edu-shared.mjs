@@ -8,6 +8,12 @@ export const STATUS_LABELS = Object.freeze({
   approved: '이수 완료', needs_revision: '보완 요청', exempt: '면제',
 });
 
+export function attachmentDisposalLabel(submission) {
+  if (submission.attachmentsPendingDisposal) return '첨부파일 파기 대기';
+  if (submission.attachmentsDisposedAt && !submission.files?.length) return '첨부파일 파기 완료';
+  return '';
+}
+
 export function getLatestSubmission(submissions = [], memberId, courseId) {
   return submissions.filter(s => String(s.memberId) === String(memberId) && String(s.courseId) === String(courseId))
     .sort((a, b) => (b.revision || 0) - (a.revision || 0) || String(b.submittedAt).localeCompare(String(a.submittedAt)) || String(b.id).localeCompare(String(a.id)))[0] || null;
