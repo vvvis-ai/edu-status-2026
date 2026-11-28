@@ -522,6 +522,8 @@ function openCourse(id = null, copy = false) {
   $('#courseDialogTitle').textContent = copy ? '교육 복제' : editingCourse ? '교육 수정' : '새 교육 등록';
   for (const name of ['name', 'site', 'url', 'requestDepartment', 'year', 'periodType', 'deadline', 'submissionDeadline', 'requirement', 'requirementNote', 'description', 'targetMode']) $('#courseForm').elements.namedItem(name).value = course[name] ?? '';
   $('#courseDetails').value = (course.details || []).join('\n');
+  if (course.importMissingName) $('#courseName').value = '';
+  if (course.importMissingYear) $('#courseYear').value = '';
   $('#coursePublished').checked = Boolean(course.published); $('#courseArchived').checked = Boolean(course.archived);
   $('#targetMemberChecks').innerHTML = checkboxes('targetMemberIds', course.targetMemberIds);
   $('#exemptMemberChecks').innerHTML = checkboxes('exemptMemberIds', course.exemptMemberIds);
@@ -873,6 +875,13 @@ $('#auditTypeFilter').addEventListener('change', () => {
 $('#fileAccessFilterForm').addEventListener('submit', event => { event.preventDefault(); void loadFileAccess(); });
 $('#fileAccessMoreButton').addEventListener('click', () => { void loadFileAccess({more:true}); });
 $('#newCourseButton').addEventListener('click', () => openCourse());
+document.addEventListener('bulk-course-review', async event => {
+  try {
+    if (!data.courses.some(course => course.id === event.detail)) await loadData();
+    if (data.courses.some(course => course.id === event.detail)) openCourse(event.detail);
+    else showToast('목록을 새로고침한 뒤 다시 선택하세요.', 'info');
+  } catch (error) { showToast(error.message, 'error'); }
+});
 $('#newMemberButton').addEventListener('click', () => openMember());
 $('#editMemberOrderButton').addEventListener('click', openMemberOrder);
 $('#editDepartmentChartButton').addEventListener('click', openDepartmentChart);

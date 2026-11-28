@@ -433,6 +433,36 @@ function memberInput(body, existing) {
   return {id:existing?.id || uuid(), name:text(body.name,'이름',100,true), position:text(body.position,'직급',100), team:text(body.team,'팀',100), active:boolean(body.active,true), joinedOn, leftOn, note:text(body.note,'메모',2000), legacyCompletions:existing?.legacyCompletions || [], createdAt:existing?.createdAt || timestamp, updatedAt:timestamp, version:(existing?.version || 0)+1};
 }
 
+import {handleDocumentAi} from './document-ai.mjs';
+
+async function importCourseDraft(request,env){
+  const url=new URL(request.url);
+  const digest=url.searchParams.get('digest')||'';
+  if(!/^[a-f0-9]{64}$/.test(digest))fail(400,'파일 식별값을 확인해 주세요.');
+  const id='notice-'+digest;
+  const filename=text(url.searchParams.get('filename'),'파일명',255,true);
+  const existing=await get(env,'courses',id);
+  if(existing)return json({id,name:existing.name,existing:true});
+  const extraction=await handleDocumentAi(request,env,'extract');
+  if(!extraction.ok)return extraction;
+  const {fields}=await extraction.json();
+  if(!Object.values(fields).some(Boolean))fail(422,'공문에서 등록 항목을 찾지 못했습니다.');
+  const timestamp=now();
+  const course={...fields,id,name:fields.name||filename,year:Number(fields.year)||new Date().getFullYear(),
+    importMissingName:!fields.name,importMissingYear:!fields.year,
+    periodType:'year',periodValue:0,details:fields.details.split(/\r?\n/).filter(Boolean),aliases:[],
+    description:'',published:false,archived:false,targetMode:'all',targetMemberIds:[],exemptMemberIds:[],
+    createdAt:timestamp,updatedAt:timestamp,version:1};
+  try{
+    await env.DB.batch([insert(env,'courses',course),insert(env,'audit',auditItem('course_created',{courseId:id,name:course.name}))]);
+  }catch(error){
+    const concurrent=await get(env,'courses',id);
+    if(concurrent)return json({id,name:concurrent.name,existing:true});
+    throw error;
+  }
+  return json({id,name:course.name,existing:false},201);
+}
+
 async function saveCourse(request, env, id) {
   const body = await readJson(request);
   const existing = id ? await required(env,'courses',id) : null;
@@ -849,6 +879,9 @@ async function route(request, env) {
   }
   if (path.startsWith('/api/admin/')) {
     const adminSession = await requireAdmin(request,env);
+    if (path==='/api/admin/course-drafts/import' && request.method==='POST') return importCourseDraft(request,env);
+    if (path==='/api/admin/document-ai/providers') return handleDocumentAi(request,env,'providers');
+    if (path==='/api/admin/document-ai/key') return handleDocumentAi(request,env,'key');
     if (path==='/api/admin/file-access' && request.method==='GET') return listFileAccess(env,url);
     if (path==='/api/admin/data' && request.method==='GET') {
       const [courses,members,submissions,overrides,auditRows,savedOrder,savedChart] = await Promise.all([...['courses','members','submissions','overrides'].map(collection=>all(env,collection)),env.DB.prepare("SELECT data FROM records WHERE collection = 'audit' ORDER BY json_extract(data,'$.createdAt') DESC,id DESC LIMIT 500").all(),get(env,'settings','member-order'),get(env,'settings','department-chart')]);

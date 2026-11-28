@@ -52,6 +52,27 @@ async function fixture(t,seed={courses:[course('c1')],members:[member('m1'),memb
   return {env,call,login,select,form};
 }
 
+test('bulk import stores a private draft and reuses it on retry', async t => {
+  const {env,call,login} = await fixture(t);
+  const cookie = await login();
+  env.GEMINI_API_KEY = 'test-only';
+  const provider = t.mock.method(globalThis,'fetch',async () => Response.json({
+    candidates:[{content:{parts:[{text:JSON.stringify({name:'Bulk import test'})}]}}],
+  }));
+  const digest = Buffer.from(await crypto.subtle.digest('SHA-256',PDF)).toString('hex');
+  const url = 'http://localhost/api/admin/course-drafts/import?provider=gemini&filename=test.pdf&digest='+digest;
+  const submit = () => handleApi(new Request(url,{method:'POST',headers:{cookie,origin:'http://localhost'},body:PDF}),env);
+  const first = await submit();
+  assert.equal(first.status,201);
+  const {id} = await first.json();
+  const admin = await (await call('/admin/data',{cookie})).json();
+  assert.equal(admin.courses.find(course => course.id===id).published,false);
+  const ordinary = await (await call('/bootstrap')).json();
+  assert.equal(ordinary.courses.some(course => course.id===id),false);
+  assert.equal((await (await submit()).json()).existing,true);
+  assert.equal(provider.mock.callCount(),1);
+});
+
 test('manual bulk disposal requires confirmation and admin access, and deletes only the selected submission revisions', async t => {
   const f = await fixture(t);
   const admin = await f.login(), first = await f.select(), second = await f.select('m2');

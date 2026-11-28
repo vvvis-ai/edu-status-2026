@@ -1,6 +1,6 @@
 export const publicAssets = [
   'edustatus_all.html','edustatus_admin.html','edu-style.css','edu-client.mjs','edu-shared.mjs',
-  'edu-public.mjs','edu-admin.mjs','edu-department.mjs','edu-workbook.mjs','edu-zip.mjs',
+  'edu-public.mjs','edu-admin.mjs','course-bulk-import.mjs','edu-department.mjs','edu-workbook.mjs','edu-zip.mjs',
   'edu-certificate-import.mjs','edu-certificate-match.mjs','edu-certificate-reader.mjs','edu-ocr-worker.js',
   'certificate-parser.js','certificate-ocr.js','vendor/pdf.min.js','vendor/pdf.worker.min.js','vendor/PDFJS-LICENSE.txt',
 ];
